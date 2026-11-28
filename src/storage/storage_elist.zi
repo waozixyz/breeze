@@ -1,6 +1,7 @@
 #import, file "../../apps/lists/src/native/lists_achievements.zi";
 #import, file "achievements.zi";
 #import "std/text_buffer"
+#import "vec"
 c3 :: #system_library "c";
 sqlite3_bind_int :: (stmt: *void, index: s32, value: s32) -> s32 #foreign c3;
 sqlite3_changes :: (db: *void) -> s32 #foreign c3;
@@ -61,8 +62,8 @@ ElistStarterItems: [3]string = .["00000000-0000-4000-8000-00000000a002",
 "00000000-0000-4000-8000-00000000a003", "00000000-0000-4000-8000-00000000a004"];
 
 elist_seed_starter :: () -> bool {
-    titles: [3]string = .[LocaleText("elist_default_item_breathe"), LocaleText("elist_default_item_walk"),
-    LocaleText("elist_default_item_water")]
+    title_keys: [3]string = .["elist_default_item_breathe", "elist_default_item_walk",
+    "elist_default_item_water"]
     user := AppTextFromCString(storage_user_id_buffer(), 128)
     statement: *void = null
     if elist_exec_sql("BEGIN IMMEDIATE") == 0 {
@@ -92,7 +93,7 @@ elist_seed_starter :: () -> bool {
         elist_bind_text(statement, 1, ElistStarterItems[index])
         elist_bind_text(statement, 2, user)
         elist_bind_text(statement, 3, ElistStarterList)
-        elist_bind_text(statement, 4, titles[index])
+        elist_bind_text(statement, 4, LocaleText(title_keys[index]))
         SqliteBindInt(statement, 5, index)
         inserted = SqliteStep(statement) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) == 1
         SqliteFinalize(statement)
@@ -150,10 +151,10 @@ elist_used_inbox :: (id: string) -> bool {
 // Devices that each made their own starter Inbox before syncing leave the
 // account with copies. Untouched copies go once another Inbox remains.
 elist_remove_duplicate_starters :: (state: *EListState) -> bool {
-    title := LocaleText("elist_default_list")
+    title := TextCopy(LocaleText("elist_default_list"))
     inboxes: s32 = 0
     for index: cast(s32)0..state.list_count - 1 {
-        if AppTextFromCString(*state.lists[index].title[0], ELIST_TITLE_SIZE) == title &&
+        if AppTextFromCString(*state.lists[index].title[0], ELIST_TITLE_SIZE) == TextView(title) &&
         !ListsSharedId(AppTextFromCString(*state.lists[index].id[0], 37)) {
             inboxes += 1
         }
@@ -166,7 +167,7 @@ elist_remove_duplicate_starters :: (state: *EListState) -> bool {
     for pass: cast(s32)0..cast(s32)2 {
         for index: cast(s32)0..state.list_count - 1 {
             id := AppTextFromCString(*state.lists[index].id[0], 37)
-            if keep >= 0 || AppTextFromCString(*state.lists[index].title[0], ELIST_TITLE_SIZE) != title ||
+            if keep >= 0 || AppTextFromCString(*state.lists[index].title[0], ELIST_TITLE_SIZE) != TextView(title) ||
             ListsSharedId(id) {
                 continue
             }
@@ -178,7 +179,7 @@ elist_remove_duplicate_starters :: (state: *EListState) -> bool {
     removed := false
     for index: cast(s32)0..state.list_count - 1 {
         id := AppTextFromCString(*state.lists[index].id[0], 37)
-        if index != keep && AppTextFromCString(*state.lists[index].title[0], ELIST_TITLE_SIZE) == title &&
+        if index != keep && AppTextFromCString(*state.lists[index].title[0], ELIST_TITLE_SIZE) == TextView(title) &&
         !ListsSharedId(id) && elist_untouched_starter(id) {
             removed = storage_elist_delete_list(id) != 0 || removed
         }

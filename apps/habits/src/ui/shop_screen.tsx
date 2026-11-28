@@ -1,3 +1,4 @@
+import { ResolvedModal } from "kryon/tsx/modal";
 import * as Cards from "habit_cards";
 import * as Shared from "habit_shared";
 // The habit shop: the coins the habits earned and the rewards the person
@@ -18,7 +19,6 @@ import * as NativeScroll from "kryon/scroll";
 import { SemanticKind } from "kryon/semantic";
 import * as NativeText from "kryon/text";
 import { TextAlign } from "kryon/text_align";
-import { End } from "kryon/tree";
 import { Box } from "kryon/tsx/box";
 import { Button } from "kryon/tsx/button";
 import { Image } from "kryon/tsx/image";
@@ -906,7 +906,7 @@ function ShopPage(): void {
         },
         children: (scrolled: NativeScroll.ScrollResult): void => {
             const shop_state = Model.CurrentShop();
-            shop_state.scroll = scrolled.scroll_offset;
+            nativeDeref(shop_state).scroll = scrolled.scroll_offset;
             let y = s32(scrolled.content.y);
             y += BalanceCard(x, y, content_width) + Model.Scale(10n);
             if (shop_state.daily_day > 0n) {
@@ -957,87 +957,97 @@ function BuyDialog(): void {
     if (width > Model.Scale(380n)) {
         width = Model.Scale(380n);
     }
-    let frame = NativeModal.Draw(shop_state.session, {
-        key: NativeLayout.KeyHash("inbe/habits/shop/buy"),
-        title: Model.Locale("habit_shop_buy_title"),
-        width: width,
-        height: Model.Scale(250n),
-        scale: shop_state.scale
+    let cancelled = false;
+    const cancelled_ref = nativeRef(cancelled);
+    let bought = false;
+    const bought_ref = nativeRef(bought);
+    let frame = ResolvedModal({
+        session: shop_state.session,
+        props: {
+            key: NativeLayout.KeyHash("inbe/habits/shop/buy"),
+            title: Model.Locale("habit_shop_buy_title"),
+            width: width,
+            height: Model.Scale(250n),
+            scale: shop_state.scale
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            let content = frame.layout.content;
+            let x = s32(content.x);
+            let y = s32(content.y);
+            let inner_w = s32(content.width);
+            let symbol = Model.Scale(30n);
+            RewardSymbol(HabitRewardIconClamp(reward.icon), Shared.Bounds(x, y, symbol, symbol));
+            let strong = Shared.NewStrong();
+            nativeSet(strong, 0n, { start: 0n, end: s32(reward.name.count) });
+            <Text
+                session={shop_state.session}
+                props={{
+                    bounds: Shared.Bounds(
+                        x + symbol + Model.Scale(10n),
+                        y,
+                        inner_w - symbol - Model.Scale(10n),
+                        Model.Scale(30n)
+                    ),
+                    text: reward.name,
+                    strong: nativeSlice(strong),
+                    vertical_align: TextAlign.TextAlignCenter,
+                    wrap: NativeText.Wrap.TextWrapEllipsis
+                }}
+            />;
+            y += Model.Scale(34n);
+            CoinAmount(
+                Shared.Number(s64(reward.price)),
+                Shared.Bounds(x, y, inner_w, Model.Scale(30n)),
+                shop_state.font + Model.Scale(4n)
+            );
+            y += Model.Scale(36n);
+            let left = shop_state.halves - s64(reward.price) * 2n;
+            <Text
+                session={shop_state.session}
+                props={{
+                    bounds: Shared.Bounds(x, y, inner_w, Model.Scale(24n)),
+                    text: Model.Filled(Model.Locale("habit_shop_buy_left"), Shared.Coins(left)),
+                    size: shop_state.small_font,
+                    class_name: shop_state.muted_class,
+                    wrap: NativeText.Wrap.TextWrapEllipsis
+                }}
+            />;
+            let button_y = s32(content.y + content.height) - Model.Scale(44n);
+            let half = (inner_w - Model.Scale(10n)) / 2n;
+            nativeDeref(cancelled_ref) = Button({
+                session: shop_state.session,
+                props: {
+                    id: 8430n,
+                    bounds: Shared.Bounds(x, button_y, half, Model.Scale(42n)),
+                    label: Model.Locale("cancel_button"),
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisOutline,
+                    fit_content: true
+                }
+            });
+            nativeDeref(bought_ref) = Button({
+                session: shop_state.session,
+                props: {
+                    id: 8431n,
+                    bounds: Shared.Bounds(
+                        x + half + Model.Scale(10n),
+                        button_y,
+                        half,
+                        Model.Scale(42n)
+                    ),
+                    label: Model.Locale("habit_shop_buy_button"),
+                    tone: ButtonTone.ButtonToneAccent,
+                    emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                    fit_content: true,
+                    disabled: left < -s64(shop_state.borrow_limit) * 2n
+                }
+            });
+        }
     });
     if (frame.dismissed) {
         shop_state.action = Habits.HABITS_SHOP_CLOSE;
         return;
     }
-    if (!frame.opened) {
-        return;
-    }
-    let content = frame.layout.content;
-    let x = s32(content.x);
-    let y = s32(content.y);
-    let inner_w = s32(content.width);
-    let symbol = Model.Scale(30n);
-    RewardSymbol(HabitRewardIconClamp(reward.icon), Shared.Bounds(x, y, symbol, symbol));
-    let strong = Shared.NewStrong();
-    nativeSet(strong, 0n, { start: 0n, end: s32(reward.name.count) });
-    <Text
-        session={shop_state.session}
-        props={{
-            bounds: Shared.Bounds(
-                x + symbol + Model.Scale(10n),
-                y,
-                inner_w - symbol - Model.Scale(10n),
-                Model.Scale(30n)
-            ),
-            text: reward.name,
-            strong: nativeSlice(strong),
-            vertical_align: TextAlign.TextAlignCenter,
-            wrap: NativeText.Wrap.TextWrapEllipsis
-        }}
-    />;
-    y += Model.Scale(34n);
-    CoinAmount(
-        Shared.Number(s64(reward.price)),
-        Shared.Bounds(x, y, inner_w, Model.Scale(30n)),
-        shop_state.font + Model.Scale(4n)
-    );
-    y += Model.Scale(36n);
-    let left = shop_state.halves - s64(reward.price) * 2n;
-    <Text
-        session={shop_state.session}
-        props={{
-            bounds: Shared.Bounds(x, y, inner_w, Model.Scale(24n)),
-            text: Model.Filled(Model.Locale("habit_shop_buy_left"), Shared.Coins(left)),
-            size: shop_state.small_font,
-            class_name: shop_state.muted_class,
-            wrap: NativeText.Wrap.TextWrapEllipsis
-        }}
-    />;
-    let button_y = s32(content.y + content.height) - Model.Scale(44n);
-    let half = (inner_w - Model.Scale(10n)) / 2n;
-    let cancelled = Button({
-        session: shop_state.session,
-        props: {
-            id: 8430n,
-            bounds: Shared.Bounds(x, button_y, half, Model.Scale(42n)),
-            label: Model.Locale("cancel_button"),
-            tone: ButtonTone.ButtonToneNeutral,
-            emphasis: ButtonEmphasis.ButtonEmphasisOutline,
-            fit_content: true
-        }
-    });
-    let bought = Button({
-        session: shop_state.session,
-        props: {
-            id: 8431n,
-            bounds: Shared.Bounds(x + half + Model.Scale(10n), button_y, half, Model.Scale(42n)),
-            label: Model.Locale("habit_shop_buy_button"),
-            tone: ButtonTone.ButtonToneAccent,
-            emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-            fit_content: true,
-            disabled: left < -s64(shop_state.borrow_limit) * 2n
-        }
-    });
-    End(shop_state.session);
     if (cancelled) {
         shop_state.action = Habits.HABITS_SHOP_CLOSE;
         return;

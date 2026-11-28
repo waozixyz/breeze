@@ -260,13 +260,19 @@ NodeTreeCall :: (context: *void, node: *AppNode, module: *u8, function: *u8,
             if owner == "" { return 0 }
             return NodeAppCallFor(runner, owner, module, function, arguments, count, result)
         }
-        profile_request := AppArgumentText(arguments[1])
-        if AppArgumentText(arguments[0]) == "entity.profile" &&
-        (profile_request == "open" || profile_request == "referrals" ||
-            (profile_request.count > 10 && profile_request[:10] == "referrals:")) &&
-        !node_tree_validating && !node_snapshot_scanning {
-            node_tree_profile_requested = CopyCString(NodeTreeAccount(), node_tree_profile_account[:]) &&
+        profile_handled: bool
+        {
+            profile_request := AppArgumentText(arguments[1])
+            if AppArgumentText(arguments[0]) == "entity.profile" &&
+            (profile_request == "open" || profile_request == "referrals" ||
+                (profile_request.count > 10 && profile_request[:10] == "referrals:")) &&
+            !node_tree_validating && !node_snapshot_scanning {
+                node_tree_profile_requested = CopyCString(NodeTreeAccount(), node_tree_profile_account[:]) &&
                 CopyCString(profile_request, node_tree_profile_page[:])
+                profile_handled = true
+            }
+        }
+        if profile_handled {
             result.* = NodeAppString(ifx node_tree_profile_requested then "queued" else "unavailable")
             return 1
         }
@@ -321,14 +327,16 @@ NodeTreeCall :: (context: *void, node: *AppNode, module: *u8, function: *u8,
     if (name == "SaveAppRecordHost" || name == "WriteStoreHost") && count == 2 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "string", cast(s32)HostString) {
-        record := AppArgumentText(arguments[0])
-        text := AppArgumentText(arguments[1])
         saved := false
-        if !node_tree_validating && !node_snapshot_scanning && NodeAppRecordNameValid(record) && text.count < Node.APP_RECORD_TEXT_MAX {
-            key := NodeTreeRecordKey(runner, node, record)
-            storage_set_setting_text(key, text)
-            saved = storage_setting_text_equals(key, text) != 0
-            PackageFree(key)
+        {
+            record := AppArgumentText(arguments[0])
+            text := AppArgumentText(arguments[1])
+            if !node_tree_validating && !node_snapshot_scanning && NodeAppRecordNameValid(record) && text.count < Node.APP_RECORD_TEXT_MAX {
+                key := NodeTreeRecordKey(runner, node, record)
+                storage_set_setting_text(key, text)
+                saved = storage_setting_text_equals(key, text) != 0
+                PackageFree(key)
+            }
         }
         result.* = HostScalar("bool", ifx saved then 1 else 0)
         return 1
@@ -414,11 +422,14 @@ NodeTreeRead :: (runner: *NodeAppRunner, node: *AppNode, name: string,
     if !HostScalarValid(arguments[0], "string", cast(s32)HostString) {
         return 0
     }
-    record := AppArgumentText(arguments[0])
-    if !NodeAppRecordNameValid(record) {
-        return 0
+    key: string
+    {
+        record := AppArgumentText(arguments[0])
+        if !NodeAppRecordNameValid(record) {
+            return 0
+        }
+        key = NodeTreeRecordKey(runner, node, record)
     }
-    key := NodeTreeRecordKey(runner, node, record)
     defer { PackageFree(key) }
     PackageFree(node_tree_record)
     node_tree_record = NodeAppRecordRead(key)

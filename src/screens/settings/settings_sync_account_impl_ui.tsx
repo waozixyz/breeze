@@ -1,3 +1,4 @@
+import { ResolvedModal } from "kryon/tsx/modal";
 // Authored UI composition; native application state remains in settings_sync_account_impl.zi.
 import * as AccountState from "settings_sync_account_impl";
 import * as NativeFieldset from "kryon/fieldset";
@@ -19,7 +20,6 @@ import {
 import { AndroidPlatform } from "environment";
 import { TextAlign } from "kryon/text_align";
 import { Wrap } from "kryon/text_props";
-import { End } from "kryon/tree";
 import { Button } from "kryon/tsx/button";
 import { Fieldset } from "kryon/tsx/fieldset";
 import { Text } from "kryon/tsx/text";
@@ -28,8 +28,10 @@ import { LocaleText } from "locale";
 import { AppScale } from "metrics";
 import { ModalType } from "modal_rules";
 import { NativePresent } from "native_flags";
+import { PackageFree, PackageText } from "package_files";
 import { DrawQrCode } from "qr_code_view";
 import {
+    NewAccountId,
     NewDisplayedId,
     NewTyped,
     PublicIdDisplayGroups,
@@ -64,7 +66,13 @@ import {
     SettingsSyncSubmitAlias,
     SettingsSyncTakeAliasResult
 } from "settings_sync_account_impl";
-import { AppReplaceText, AppTextFromCString, FrameTextHold } from "text_buffers";
+import {
+    AppReplaceText,
+    AppTextFromCString,
+    FrameTextHold,
+    FrameTextSave,
+    FrameTextRead
+} from "text_buffers";
 import { SampleTextFieldInput, TextInputWriteClipboard } from "text_input_host";
 
 function SettingsSyncField(
@@ -167,16 +175,20 @@ function SettingsDeviceLinkDraw(
             height: float32(side)
         });
         nativeDeref(y) = nativeDeref(y) + (side + AppScale(10n));
-        let cancel = SettingsSyncButtonProps(
-            LocaleText("cancel_button"),
-            x,
-            nativeDeref(y),
-            width,
-            button_h,
-            5280n,
-            false
-        );
-        if (Button({ session: app.ui.session, props: cancel })) {
+        if (
+            Button({
+                session: app.ui.session,
+                props: SettingsSyncButtonProps(
+                    LocaleText("cancel_button"),
+                    x,
+                    nativeDeref(y),
+                    width,
+                    button_h,
+                    5280n,
+                    false
+                )
+            })
+        ) {
             DeviceLinkCancel();
         }
         nativeDeref(y) = nativeDeref(y) + button_h;
@@ -204,41 +216,53 @@ function SettingsDeviceLinkDraw(
         <Text session={app.ui.session} props={number} />;
         nativeDeref(y) = nativeDeref(y) + AppScale(60n);
         if (stage === DeviceLinkStage.DeviceLinkConfirm) {
-            let connect = SettingsSyncButtonProps(
-                LocaleText("device_link_connect"),
-                x,
-                nativeDeref(y),
-                half,
-                button_h,
-                5281n,
-                true
-            );
-            if (Button({ session: app.ui.session, props: connect })) {
+            if (
+                Button({
+                    session: app.ui.session,
+                    props: SettingsSyncButtonProps(
+                        LocaleText("device_link_connect"),
+                        x,
+                        nativeDeref(y),
+                        half,
+                        button_h,
+                        5281n,
+                        true
+                    )
+                })
+            ) {
                 DeviceLinkAccept();
             }
-            let cancel = SettingsSyncButtonProps(
-                LocaleText("cancel_button"),
-                x + half + AppScale(10n),
-                nativeDeref(y),
-                half,
-                button_h,
-                5282n,
-                false
-            );
-            if (Button({ session: app.ui.session, props: cancel })) {
+            if (
+                Button({
+                    session: app.ui.session,
+                    props: SettingsSyncButtonProps(
+                        LocaleText("cancel_button"),
+                        x + half + AppScale(10n),
+                        nativeDeref(y),
+                        half,
+                        button_h,
+                        5282n,
+                        false
+                    )
+                })
+            ) {
                 DeviceLinkCancel();
             }
         } else {
-            let cancel = SettingsSyncButtonProps(
-                LocaleText("cancel_button"),
-                x,
-                nativeDeref(y),
-                width,
-                button_h,
-                5282n,
-                false
-            );
-            if (Button({ session: app.ui.session, props: cancel })) {
+            if (
+                Button({
+                    session: app.ui.session,
+                    props: SettingsSyncButtonProps(
+                        LocaleText("cancel_button"),
+                        x,
+                        nativeDeref(y),
+                        width,
+                        button_h,
+                        5282n,
+                        false
+                    )
+                })
+            ) {
                 DeviceLinkCancel();
             }
         }
@@ -247,28 +271,36 @@ function SettingsDeviceLinkDraw(
     }
     if (stage === DeviceLinkStage.DeviceLinkAsk) {
         SettingsDeviceLinkText(app, LocaleText("device_link_ask"), x, y, width, AppScale(52n));
-        let connect = SettingsSyncButtonProps(
-            LocaleText("device_link_connect"),
-            x,
-            nativeDeref(y),
-            half,
-            button_h,
-            5283n,
-            true
-        );
-        if (Button({ session: app.ui.session, props: connect })) {
+        if (
+            Button({
+                session: app.ui.session,
+                props: SettingsSyncButtonProps(
+                    LocaleText("device_link_connect"),
+                    x,
+                    nativeDeref(y),
+                    half,
+                    button_h,
+                    5283n,
+                    true
+                )
+            })
+        ) {
             DeviceLinkAccept();
         }
-        let cancel = SettingsSyncButtonProps(
-            LocaleText("cancel_button"),
-            x + half + AppScale(10n),
-            nativeDeref(y),
-            half,
-            button_h,
-            5284n,
-            false
-        );
-        if (Button({ session: app.ui.session, props: cancel })) {
+        if (
+            Button({
+                session: app.ui.session,
+                props: SettingsSyncButtonProps(
+                    LocaleText("cancel_button"),
+                    x + half + AppScale(10n),
+                    nativeDeref(y),
+                    half,
+                    button_h,
+                    5284n,
+                    false
+                )
+            })
+        ) {
             DeviceLinkCancel();
         }
         nativeDeref(y) = nativeDeref(y) + (button_h + AppScale(10n));
@@ -295,16 +327,20 @@ function SettingsDeviceLinkDraw(
             nativeDeref(y) = nativeDeref(y) + (button_h + AppScale(10n));
             return;
         }
-        let done = SettingsSyncButtonProps(
-            LocaleText("done_button"),
-            x,
-            nativeDeref(y),
-            width,
-            button_h,
-            5285n,
-            false
-        );
-        if (Button({ session: app.ui.session, props: done })) {
+        if (
+            Button({
+                session: app.ui.session,
+                props: SettingsSyncButtonProps(
+                    LocaleText("done_button"),
+                    x,
+                    nativeDeref(y),
+                    width,
+                    button_h,
+                    5285n,
+                    false
+                )
+            })
+        ) {
             DeviceLinkCancel();
         }
         nativeDeref(y) = nativeDeref(y) + (button_h + AppScale(10n));
@@ -314,136 +350,158 @@ function SettingsDeviceLinkDraw(
     SettingsDeviceLinkText(app, LocaleText(hint), x, y, width, AppScale(52n));
     let scan_supported = AndroidPlatform() !== 0n;
     let show_width = scan_supported ? half : width;
-    let show = SettingsSyncButtonProps(
-        LocaleText("device_link_show"),
-        x,
-        nativeDeref(y),
-        show_width,
-        button_h,
-        5286n,
-        !scan_supported
-    );
-    if (Button({ session: app.ui.session, props: show })) {
+    if (
+        Button({
+            session: app.ui.session,
+            props: SettingsSyncButtonProps(
+                LocaleText("device_link_show"),
+                x,
+                nativeDeref(y),
+                show_width,
+                button_h,
+                5286n,
+                !scan_supported
+            )
+        })
+    ) {
         DeviceLinkShow();
     }
     if (scan_supported) {
-        let scan = SettingsSyncButtonProps(
-            LocaleText("device_link_scan"),
-            x + half + AppScale(10n),
-            nativeDeref(y),
-            half,
-            button_h,
-            5287n,
-            true
-        );
-        if (Button({ session: app.ui.session, props: scan })) {
+        if (
+            Button({
+                session: app.ui.session,
+                props: SettingsSyncButtonProps(
+                    LocaleText("device_link_scan"),
+                    x + half + AppScale(10n),
+                    nativeDeref(y),
+                    half,
+                    button_h,
+                    5287n,
+                    true
+                )
+            })
+        ) {
             SettingsDeviceLinkOpenScanner();
         }
     }
     nativeDeref(y) = nativeDeref(y) + (button_h + AppScale(10n));
 }
 
-function SettingsSyncModal(
+function SettingsSyncModalProps(
     app: NativeRef<InnerBreeze>,
     key: string,
     title: string,
     height: s32
-): NativeModal.ModalFrameResult {
+): NativeModal.Props {
     let width = app.ui.view_width - AppScale(32n);
     if (width > AppScale(400n)) {
         width = AppScale(400n);
     }
-    return NativeModal.Draw(app.ui.session, {
+    return {
         key: NativeLayout.KeyHash(key),
         title: title,
         width: width,
         height: height
-    });
+    };
 }
 
 export function SettingsSyncPublicIdModal(
     app: NativeRef<InnerBreeze>,
     public_id: string = ""
 ): s32 {
-    let account_id = public_id;
-    if (
-        !NativePresent(app) ||
-        (account_id.count === 0n && !SettingsSyncLoadAccountId(app, nativeRef(account_id)))
-    ) {
+    if (!NativePresent(app)) {
         return 1n;
     }
-    let frame = SettingsSyncModal(
-        app,
-        "inbe/account/public-id",
-        LocaleText("sync_public_id_full_title"),
-        AppScale(300n)
-    );
+    let loadedId = NewAccountId();
+    let account_id = public_id;
+    if (account_id.count === 0n) {
+        if (!SettingsSyncLoadAccountId(nativeSlice(loadedId))) {
+            return 1n;
+        }
+        account_id = AppTextFromCString(nativeRef(nativeAt(loadedId, 0n)), s32(loadedId.count));
+    }
+    let result: s32 = s32(0n);
+    const result_ref = nativeRef(result);
+    let frame = ResolvedModal({
+        session: app.ui.session,
+        props: SettingsSyncModalProps(
+            app,
+            "inbe/account/public-id",
+            LocaleText("sync_public_id_full_title"),
+            AppScale(300n)
+        ),
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            let content = frame.layout.content;
+            let x = s32(content.x);
+            let y = s32(content.y);
+            let width = s32(content.width);
+            <Text
+                session={app.ui.session}
+                props={SettingsSyncTextProps(
+                    LocaleText("sync_public_id_full_message"),
+                    x,
+                    y,
+                    width,
+                    AppScale(30n),
+                    false
+                )}
+            />;
+            y = y + AppScale(38n);
+            let displayed_id = NewDisplayedId();
+            let id = PublicIdDisplayGroups(account_id, nativeSlice(displayed_id));
+            let field: NativeFieldset.Props = {};
+            field.bounds = SettingsSyncRect(x, y, width, AppScale(70n));
+            <Fieldset session={app.ui.session} props={field} />;
+            let id_props: NativeText.Props = SettingsSyncTextProps(
+                id,
+                x + AppScale(10n),
+                y + AppScale(15n),
+                width - AppScale(20n),
+                AppScale(40n),
+                true
+            );
+            id_props.align = TextAlign.TextAlignCenter;
+            id_props.wrap = Wrap.TextWrapAuto;
+            <Text session={app.ui.session} props={id_props} />;
+            y = y + AppScale(86n);
+            if (
+                Button({
+                    session: app.ui.session,
+                    props: SettingsSyncButtonProps(
+                        LocaleText("sync_copy_id_button"),
+                        x,
+                        y,
+                        width,
+                        AppScale(38n),
+                        5250n,
+                        false
+                    )
+                })
+            ) {
+                SettingsSyncCopyId(account_id);
+            }
+            y = y + AppScale(47n);
+            if (
+                Button({
+                    session: app.ui.session,
+                    props: SettingsSyncButtonProps(
+                        LocaleText("close_button"),
+                        x,
+                        y,
+                        width,
+                        AppScale(38n),
+                        5251n,
+                        false
+                    )
+                })
+            ) {
+                nativeDeref(result_ref) = 1n;
+            }
+        }
+    });
     if (frame.dismissed) {
         return 1n;
     }
-    if (!frame.opened) {
-        return 0n;
-    }
-    let content = frame.layout.content;
-    let x = s32(content.x);
-    let y = s32(content.y);
-    let width = s32(content.width);
-    <Text
-        session={app.ui.session}
-        props={SettingsSyncTextProps(
-            LocaleText("sync_public_id_full_message"),
-            x,
-            y,
-            width,
-            AppScale(30n),
-            false
-        )}
-    />;
-    y = y + AppScale(38n);
-    let displayed_id = NewDisplayedId();
-    let id = PublicIdDisplayGroups(account_id, nativeSlice(displayed_id));
-    let field: NativeFieldset.Props = {};
-    field.bounds = SettingsSyncRect(x, y, width, AppScale(70n));
-    <Fieldset session={app.ui.session} props={field} />;
-    let id_props: NativeText.Props = SettingsSyncTextProps(
-        id,
-        x + AppScale(10n),
-        y + AppScale(15n),
-        width - AppScale(20n),
-        AppScale(40n),
-        true
-    );
-    id_props.align = TextAlign.TextAlignCenter;
-    id_props.wrap = Wrap.TextWrapAuto;
-    <Text session={app.ui.session} props={id_props} />;
-    y = y + AppScale(86n);
-    let copy = SettingsSyncButtonProps(
-        LocaleText("sync_copy_id_button"),
-        x,
-        y,
-        width,
-        AppScale(38n),
-        5250n,
-        false
-    );
-    if (Button({ session: app.ui.session, props: copy })) {
-        SettingsSyncCopyId(account_id);
-    }
-    y = y + AppScale(47n);
-    let close = SettingsSyncButtonProps(
-        LocaleText("close_button"),
-        x,
-        y,
-        width,
-        AppScale(38n),
-        5251n,
-        false
-    );
-    let result: s32 = s32(0n);
-    if (Button({ session: app.ui.session, props: close })) {
-        result = 1n;
-    }
-    End(app.ui.session);
     return result;
 }
 
@@ -459,26 +517,32 @@ export function SettingsSyncAccountConfig(
     const session = app.ui.session;
     const buttonHeight = AppScale(38n);
     const gap = AppScale(10n);
-    let accountId: string = "";
-    let hasAccount = SettingsSyncLoadAccountId(app, nativeRef(accountId));
+    let accountId = NewAccountId();
+    let hasAccount = SettingsSyncLoadAccountId(nativeSlice(accountId));
     if (!hasAccount) {
-        const create = SettingsSyncButtonProps(
-            LocaleText("sync_create_account_button"),
-            x,
-            nativeDeref(y),
-            width,
-            buttonHeight,
-            5201n,
-            true
-        );
-        if (Button({ session: session, props: create })) {
-            hasAccount = SettingsSyncCreate(app) !== 0n;
+        if (
+            Button({
+                session: session,
+                props: SettingsSyncButtonProps(
+                    LocaleText("sync_create_account_button"),
+                    x,
+                    nativeDeref(y),
+                    width,
+                    buttonHeight,
+                    5201n,
+                    true
+                )
+            })
+        ) {
+            if (SettingsSyncCreate(app) !== 0n) {
+                hasAccount = SettingsSyncLoadAccountId(nativeSlice(accountId));
+            }
         }
         nativeDeref(y) = nativeDeref(y) + buttonHeight + gap;
         if (!hasAccount) {
             nativeDeref(y) = nativeDeref(y) + AppScale(8n);
             SettingsDeviceLinkDraw(app, x, width, y, false);
-            hasAccount = SettingsSyncLoadAccountId(app, nativeRef(accountId));
+            hasAccount = SettingsSyncLoadAccountId(nativeSlice(accountId));
         }
         if (!hasAccount) {
             settings_screen_draw_status_reserved(x, y, AppScale(42n));
@@ -498,34 +562,45 @@ export function SettingsSyncAccountConfig(
         )}
     />;
     nativeDeref(y) = nativeDeref(y) + AppScale(30n);
-    const displayId = SettingsSyncDisplayId(app, accountId);
-    <Text
-        session={session}
-        props={SettingsSyncTextProps(displayId, x, nativeDeref(y), width, AppScale(32n), false)}
-    />;
-    nativeDeref(y) = nativeDeref(y) + AppScale(36n);
+    {
+        const displayId = SettingsSyncDisplayId(
+            app,
+            AppTextFromCString(nativeRef(nativeAt(accountId, 0n)), s32(accountId.count))
+        );
+        <Text
+            session={session}
+            props={SettingsSyncTextProps(displayId, x, nativeDeref(y), width, AppScale(32n), false)}
+        />;
+        nativeDeref(y) = nativeDeref(y) + AppScale(36n);
+    }
     const statusHeight = SettingsSyncStatusHeight(width);
-    let status = SettingsSyncTextProps(
-        LocaleText(app_sync_status_key()),
-        x,
-        nativeDeref(y),
-        width,
-        statusHeight,
-        true
-    );
-    status.wrap = Wrap.TextWrapAuto;
-    <Text session={session} props={status} />;
+    {
+        let status = SettingsSyncTextProps(
+            LocaleText(app_sync_status_key()),
+            x,
+            nativeDeref(y),
+            width,
+            statusHeight,
+            true
+        );
+        status.wrap = Wrap.TextWrapAuto;
+        <Text session={session} props={status} />;
+    }
     nativeDeref(y) = nativeDeref(y) + statusHeight + AppScale(8n);
-    const syncNow = SettingsSyncButtonProps(
-        LocaleText("sync_now_button"),
-        x,
-        nativeDeref(y),
-        width,
-        buttonHeight,
-        5204n,
-        true
-    );
-    if (Button({ session: session, props: syncNow })) {
+    if (
+        Button({
+            session: session,
+            props: SettingsSyncButtonProps(
+                LocaleText("sync_now_button"),
+                x,
+                nativeDeref(y),
+                width,
+                buttonHeight,
+                5204n,
+                true
+            )
+        })
+    ) {
         SettingsSyncNow(app);
     }
     nativeDeref(y) = nativeDeref(y) + buttonHeight + gap + AppScale(8n);
@@ -544,22 +619,24 @@ export function SettingsSyncAccountConfig(
     />;
     nativeDeref(y) = nativeDeref(y) + AppScale(30n);
     const hintHeight = SettingsSyncNodeHintHeight(width);
-    let hint = SettingsSyncTextProps(
-        LocaleText("sync_nodes_hint"),
-        x,
-        nativeDeref(y),
-        width,
-        hintHeight,
-        true
-    );
-    hint.wrap = Wrap.TextWrapAuto;
-    <Text session={session} props={hint} />;
+    {
+        let hint = SettingsSyncTextProps(
+            LocaleText("sync_nodes_hint"),
+            x,
+            nativeDeref(y),
+            width,
+            hintHeight,
+            true
+        );
+        hint.wrap = Wrap.TextWrapAuto;
+        <Text session={session} props={hint} />;
+    }
     nativeDeref(y) = nativeDeref(y) + hintHeight + AppScale(8n);
-    const preferred = SettingsSyncPreferredNode(app);
+    const preferred = SettingsSyncPreferredNode();
     const busy = app_sync_loading() !== 0n;
     const count = SyncNodeCount();
     for (let index: s32 = s32(0n); index < count; index += 1n) {
-        const address = SettingsSyncNodeAddress(app, index);
+        const address = SettingsSyncNodeAddress(index);
         const selected = address === preferred;
         let node = SettingsSyncButtonProps(
             address,
@@ -578,24 +655,30 @@ export function SettingsSyncAccountConfig(
         if (Button({ session: session, props: node }) && SyncNodePrefer(address)) {
             SettingsSyncNow(app);
         }
-        let remove = SettingsSyncButtonProps(
-            LocaleText("launcher_uninstall"),
-            x + width - AppScale(44n),
-            nativeDeref(y),
-            AppScale(44n),
-            AppScale(52n),
-            5260n + index,
-            false
-        );
-        remove.icon_only = true;
-        remove.icon_shape = "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17";
-        remove.disabled = busy || SyncNodeCount() <= 1n;
-        if (Button({ session: session, props: remove })) {
+        let removeClicked = false;
+        {
+            let remove = SettingsSyncButtonProps(
+                LocaleText("launcher_uninstall"),
+                x + width - AppScale(44n),
+                nativeDeref(y),
+                AppScale(44n),
+                AppScale(52n),
+                5260n + index,
+                false
+            );
+            remove.icon_only = true;
+            remove.icon_shape = "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17";
+            remove.disabled = busy || SyncNodeCount() <= 1n;
+            removeClicked = Button({ session: session, props: remove });
+        }
+        PackageFree(address);
+        if (removeClicked) {
             SyncNodeRemove(index);
             break;
         }
         nativeDeref(y) = nativeDeref(y) + AppScale(60n);
     }
+    PackageFree(preferred);
     <Text
         session={session}
         props={SettingsSyncTextProps(
@@ -626,30 +709,38 @@ export function SettingsSyncAccountConfig(
     ) {
         SettingsSyncServerSave(app);
     }
-    let add = SettingsSyncButtonProps(
-        LocaleText("sync_nodes_add"),
-        x + width - AppScale(78n),
-        nativeDeref(y),
-        AppScale(78n),
-        buttonHeight,
-        5208n,
-        false
-    );
-    add.disabled = busy;
-    if (Button({ session: session, props: add })) {
+    let add_clicked = false;
+    {
+        let add = SettingsSyncButtonProps(
+            LocaleText("sync_nodes_add"),
+            x + width - AppScale(78n),
+            nativeDeref(y),
+            AppScale(78n),
+            buttonHeight,
+            5208n,
+            false
+        );
+        add.disabled = busy;
+        add_clicked = Button({ session: session, props: add });
+    }
+    if (add_clicked) {
         SettingsSyncServerSave(app);
     }
     nativeDeref(y) = nativeDeref(y) + buttonHeight + AppScale(20n);
-    const details = SettingsSyncButtonProps(
-        LocaleText("sync_account_options"),
-        x,
-        nativeDeref(y),
-        width,
-        buttonHeight,
-        5240n,
-        false
-    );
-    if (Button({ session: session, props: details })) {
+    if (
+        Button({
+            session: session,
+            props: SettingsSyncButtonProps(
+                LocaleText("sync_account_options"),
+                x,
+                nativeDeref(y),
+                width,
+                buttonHeight,
+                5240n,
+                false
+            )
+        })
+    ) {
         AccountState.sync_account_details = !AccountState.sync_account_details;
     }
     nativeDeref(y) = nativeDeref(y) + buttonHeight + gap;
@@ -657,55 +748,73 @@ export function SettingsSyncAccountConfig(
         settings_screen_draw_status_reserved(x, y, AppScale(42n));
         return;
     }
-    const copy = SettingsSyncButtonProps(
-        LocaleText("sync_copy_id_button"),
-        x,
-        nativeDeref(y),
-        width,
-        buttonHeight,
-        5205n,
-        false
-    );
-    if (Button({ session: session, props: copy })) {
-        SettingsSyncCopyId(accountId);
+    if (
+        Button({
+            session: session,
+            props: SettingsSyncButtonProps(
+                LocaleText("sync_copy_id_button"),
+                x,
+                nativeDeref(y),
+                width,
+                buttonHeight,
+                5205n,
+                false
+            )
+        })
+    ) {
+        SettingsSyncCopyId(
+            AppTextFromCString(nativeRef(nativeAt(accountId, 0n)), s32(accountId.count))
+        );
     }
     nativeDeref(y) = nativeDeref(y) + buttonHeight + gap;
-    const alias = SettingsSyncButtonProps(
-        LocaleText("sync_alias_button"),
-        x,
-        nativeDeref(y),
-        width,
-        buttonHeight,
-        5206n,
-        false
-    );
-    if (Button({ session: session, props: alias })) {
+    if (
+        Button({
+            session: session,
+            props: SettingsSyncButtonProps(
+                LocaleText("sync_alias_button"),
+                x,
+                nativeDeref(y),
+                width,
+                buttonHeight,
+                5206n,
+                false
+            )
+        })
+    ) {
         SettingsSyncOpenAlias(app);
     }
     nativeDeref(y) = nativeDeref(y) + buttonHeight + gap;
-    const logout = SettingsSyncButtonProps(
-        LocaleText("sync_logout_button"),
-        x,
-        nativeDeref(y),
-        width,
-        buttonHeight,
-        5209n,
-        false
-    );
-    if (Button({ session: session, props: logout })) {
+    if (
+        Button({
+            session: session,
+            props: SettingsSyncButtonProps(
+                LocaleText("sync_logout_button"),
+                x,
+                nativeDeref(y),
+                width,
+                buttonHeight,
+                5209n,
+                false
+            )
+        })
+    ) {
         SettingsSyncLogout();
     }
     nativeDeref(y) = nativeDeref(y) + buttonHeight + gap;
-    const clear = SettingsSyncButtonProps(
-        LocaleText("sync_clear_remote_data_button"),
-        x,
-        nativeDeref(y),
-        width,
-        buttonHeight,
-        5210n,
-        false
-    );
-    if (Button({ session: session, props: clear })) {
+    if (
+        Button({
+            session: session,
+            props: SettingsSyncButtonProps(
+                LocaleText("sync_clear_remote_data_button"),
+                x,
+                nativeDeref(y),
+                width,
+                buttonHeight,
+                5210n,
+                false
+            )
+        })
+    ) {
         app_open_modal(app, ModalType.ModalConfirmDeleteSyncAccount);
     }
     nativeDeref(y) = nativeDeref(y) + buttonHeight + gap;
@@ -720,84 +829,109 @@ export function SettingsSyncAliasModal(app: NativeRef<InnerBreeze>): s32 {
     if (pending !== 0n) {
         return pending;
     }
-    const stored = storage_get_setting_text(AccountState.sync_account_alias_key);
+    const stored = PackageText(storage_get_setting_text(AccountState.sync_account_alias_key), "");
     const hasAlias = stored.count !== 0n;
-    const title = LocaleText(hasAlias ? "sync_alias_change_title" : "sync_alias_title");
-    const message = LocaleText(hasAlias ? "sync_alias_change_message" : "sync_alias_message");
-    const frame = SettingsSyncModal(app, "inbe/account/alias", title, AppScale(280n));
+    const title_range = FrameTextSave(
+        nativeRef(app.ui.frame_text),
+        LocaleText(hasAlias ? "sync_alias_change_title" : "sync_alias_title")
+    );
+    const message_range = FrameTextSave(
+        nativeRef(app.ui.frame_text),
+        LocaleText(hasAlias ? "sync_alias_change_message" : "sync_alias_message")
+    );
+    let result: s32 = s32(0n);
+    const result_ref = nativeRef(result);
+    const frame = ResolvedModal({
+        session: app.ui.session,
+        props: SettingsSyncModalProps(
+            app,
+            "inbe/account/alias",
+            FrameTextRead(nativeRef(app.ui.frame_text), title_range),
+            AppScale(280n)
+        ),
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            const session = app.ui.session;
+            const content = frame.layout.content;
+            const x = s32(content.x);
+            const width = s32(content.width);
+            let y = s32(content.y);
+            <Text
+                session={session}
+                props={SettingsSyncTextProps(
+                    FrameTextRead(nativeRef(app.ui.frame_text), message_range),
+                    x,
+                    y,
+                    width,
+                    AppScale(48n),
+                    false
+                )}
+            />;
+            y += AppScale(54n);
+            const committed = SettingsSyncField(
+                app,
+                nativeSlice(app.sync_alias_input),
+                nativeRef(app.sync_alias_cursor),
+                nativeRef(app.sync_alias_focused),
+                nativeRef(AccountState.alias_anchor),
+                nativeRef(AccountState.alias_scroll_x),
+                x,
+                y,
+                width,
+                5240n,
+                32n
+            );
+            SettingsSyncNormalizeAlias(app);
+            y += AppScale(45n);
+            <Text
+                session={session}
+                props={SettingsSyncTextProps(
+                    LocaleText("sync_alias_rule"),
+                    x,
+                    y,
+                    width,
+                    AppScale(36n),
+                    true
+                )}
+            />;
+            y += AppScale(46n);
+            if (
+                Button({
+                    session: session,
+                    props: SettingsSyncButtonProps(
+                        LocaleText("close_button"),
+                        x,
+                        y,
+                        width,
+                        AppScale(38n),
+                        5241n,
+                        false
+                    )
+                })
+            ) {
+                nativeDeref(result_ref) = 3n;
+            }
+            y += AppScale(47n);
+            const saveLabel = LocaleText(
+                hasAlias ? "sync_alias_save_button" : "sync_alias_register_button"
+            );
+            let save = SettingsSyncButtonProps(saveLabel, x, y, width, AppScale(38n), 5242n, true);
+            save.disabled = SettingsSyncAliasBusy();
+            const alias = AppTextFromCString(nativeRef(nativeAt(app.sync_alias_input, 0n)), 40n);
+            if (
+                (Button({ session: session, props: save }) || (committed && !save.disabled)) &&
+                SettingsSyncAliasValid(alias) &&
+                alias !== stored
+            ) {
+                const saved = SettingsSyncSubmitAlias(app, alias);
+                if (saved !== 0n) {
+                    nativeDeref(result_ref) = saved;
+                }
+            }
+        }
+    });
+    PackageFree(stored);
     if (frame.dismissed) {
         return 3n;
     }
-    if (!frame.opened) {
-        return 0n;
-    }
-    const session = app.ui.session;
-    const content = frame.layout.content;
-    const x = s32(content.x);
-    const width = s32(content.width);
-    let y = s32(content.y);
-    <Text
-        session={session}
-        props={SettingsSyncTextProps(message, x, y, width, AppScale(48n), false)}
-    />;
-    y += AppScale(54n);
-    const committed = SettingsSyncField(
-        app,
-        nativeSlice(app.sync_alias_input),
-        nativeRef(app.sync_alias_cursor),
-        nativeRef(app.sync_alias_focused),
-        nativeRef(AccountState.alias_anchor),
-        nativeRef(AccountState.alias_scroll_x),
-        x,
-        y,
-        width,
-        5240n,
-        32n
-    );
-    SettingsSyncNormalizeAlias(app);
-    y += AppScale(45n);
-    <Text
-        session={session}
-        props={SettingsSyncTextProps(
-            LocaleText("sync_alias_rule"),
-            x,
-            y,
-            width,
-            AppScale(36n),
-            true
-        )}
-    />;
-    y += AppScale(46n);
-    const close = SettingsSyncButtonProps(
-        LocaleText("close_button"),
-        x,
-        y,
-        width,
-        AppScale(38n),
-        5241n,
-        false
-    );
-    let result: s32 = s32(0n);
-    if (Button({ session: session, props: close })) {
-        result = 3n;
-    }
-    y += AppScale(47n);
-    const saveLabel = LocaleText(
-        hasAlias ? "sync_alias_save_button" : "sync_alias_register_button"
-    );
-    let save = SettingsSyncButtonProps(saveLabel, x, y, width, AppScale(38n), 5242n, true);
-    save.disabled = SettingsSyncAliasBusy();
-    const alias = AppTextFromCString(nativeRef(nativeAt(app.sync_alias_input, 0n)), 40n);
-    if (
-        (Button({ session: session, props: save }) || (committed && !save.disabled)) &&
-        SettingsSyncAliasValid(alias) &&
-        alias !== stored
-    ) {
-        const saved = SettingsSyncSubmitAlias(app, alias);
-        if (saved !== 0n) {
-            result = saved;
-        }
-    }
-    End(session);
     return result;
 }

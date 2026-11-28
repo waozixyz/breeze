@@ -9,18 +9,23 @@ import * as NativeScroll from "kryon/scroll";
 import * as NativeText from "kryon/text";
 import * as State from "lumi_view";
 import {
-    ApplyDraftEdit,
+    ApplyLumiEdit,
+    ApplyPendingLumiDraft,
     Bounds,
     MessageTextFromBytes,
     ChartDate,
     ChartPointSummary,
+    ClearLumiDraft,
     CommandPrefix,
     CommandText,
     CompletionSuggestion,
+    DiscardLumiClipboard,
+    DiscardLumiEdit,
     CopyChatRow,
     CopyLumiText,
     CountText,
     DraftIntent,
+    DraftText,
     FillDraft,
     IsSelected,
     LUMI_CANDIDATES_PER_FRAME,
@@ -33,9 +38,14 @@ import {
     LUMI_SEND_ICON,
     LUMI_SWIRL_SECONDS,
     LumiAgreementHost,
+    LumiClipboardKeep,
+    LumiClipboardUpdate,
     LumiDeleteRowHost,
+    LumiEditKeep,
+    LumiEditUpdate,
     LumiFeedbackChoiceHost,
     LumiFirstVisibleRowHost,
+    LumiFrameScalars,
     LumiLoadOlderHost,
     LumiRowOffsetHost,
     LumiViewLocaleHost,
@@ -47,6 +57,7 @@ import {
     NewOptions,
     OpenLinkHost,
     OpenLumiSettingsHost,
+    QueueLumiDraft,
     ReadLumiChatRowHost,
     ReadLumiSuggestionHabitHost,
     ReadLumiSuggestionTaskHost,
@@ -60,9 +71,10 @@ import {
     SetLumiOnlineHost,
     SlotRow,
     SmoothFramesHost,
+    StoreLumiDraft,
     SweepStart,
     SweepTo,
-    WriteLumiUiHost
+    WriteLumiFrame
 } from "lumi_view";
 import { Box } from "kryon/tsx/box";
 import { Button } from "kryon/tsx/button";
@@ -70,7 +82,6 @@ import { ButtonEmphasis, ButtonTone } from "kryon/control_props";
 import { Checkbox } from "kryon/tsx/checkbox";
 import { ContextMenu } from "kryon/tsx/context_menu";
 import { CosineDegrees, SineDegrees } from "std/math";
-import { End } from "kryon/tree";
 import { Scroll } from "kryon/tsx/scroll";
 import { FlagIntersection, FlagShiftLeft } from "native_flags";
 import { Image } from "kryon/tsx/image";
@@ -267,7 +278,7 @@ function Suggestion(id: s32, text: string, bounds: Rectangle, label: string = ""
             }
         })
     ) {
-        FillDraft(text);
+        QueueLumiDraft(text);
         return true;
     }
     return false;
@@ -636,7 +647,7 @@ function LumiTitleBar(): s32 {
     return height;
 }
 
-function LumiAgreementView(top: s32): void {
+function LumiAgreementView(top: s32, agreement: string): void {
     let column = NativeLayout.CenteredColumnFor(State.frame.width, Scale(720n), Scale(16n));
     let buttons_top = State.frame.height - State.frame.bottom - Scale(16n) - Scale(48n);
     let area_height = buttons_top - Scale(12n) - top;
@@ -644,7 +655,7 @@ function LumiAgreementView(top: s32): void {
         area_height = Scale(60n);
     }
     let counts = LumiFormatInto(
-        State.frame.agreement_text,
+        agreement,
         true,
         nativeSlice(State.agreement_bytes),
         nativeSlice(State.agreement_strong)
@@ -930,131 +941,19 @@ function ChatHistory(
     }
 }
 
-export function LumiViewComposition(
-    message: LumiMessage,
+// Suggestion chips and candidates above the composer. The draft is only
+// read here, so its borrowed view lives and dies inside this helper; a
+// pressed chip records its fill and the composer applies it after this
+// scope ends.
+function DraftSuggestions(
     commands: LumiCommands,
-    revision: s64
-): LumiMessage {
-    State.frame = ReadLumiUiHost();
-    let title_height = LumiTitleBar();
-    if (State.frame.agreement !== 0n) {
-        LumiAgreementView(title_height + Scale(8n));
-        WriteLumiUiHost(State.frame);
-        return message;
-    }
-    let column = NativeLayout.CenteredColumnFor(State.frame.width, Scale(720n), Scale(16n));
-    let x = column.x;
-    let width = column.width;
-    let input_height = Scale(48n);
-    let measured_height = State.frame.draft_height + Scale(24n);
-    if (measured_height > input_height) {
-        input_height = measured_height;
-    }
-    if (input_height > Scale(144n)) {
-        input_height = Scale(144n);
-    }
-    let footer = State.frame.height - State.frame.bottom - Scale(16n) - input_height;
-    let suggestions_top = footer - Scale(LumiTrim(State.frame.value).count > 0n ? 46n : 0n);
-    let history_top = title_height + Scale(8n);
-    let menu = MenuCommands(revision);
-    let menu_matches = NewMenuMatches();
-    let menu_count: s32 = s32(0n);
-    let menu_target: s32 = s32(-1n);
-    if (MenuOpen(State.frame.value)) {
-        for (let index: s32 = s32(0n); index < LUMI_MENU_COMMANDS; index += 1n) {
-            let command = nativeAt(menu, index);
-            if (
-                (command.requirement !== 0n &&
-                    FlagIntersection(State.frame.available_apps, command.requirement) === 0n) ||
-                (command.choice_only &&
-                    !State.frame.choosing_habit &&
-                    !State.frame.choosing_diary) ||
-                !LumiStarts(command.name, State.frame.value)
-            ) {
-                continue;
-            }
-            if (menu_target < 0n || LumiEqual(command.name, State.frame.value)) {
-                menu_target = menu_count;
-            }
-            nativeSet(menu_matches, menu_count, index);
-            menu_count += 1n;
-        }
-    }
-    let menu_row = Scale(44n);
-    let menu_height = menu_count * menu_row;
-    if (menu_height > (menu_row * 9n) / 2n) {
-        menu_height = (menu_row * 9n) / 2n;
-    }
-    if (menu_count > 0n && footer - Scale(8n) - menu_height - history_top < Scale(68n)) {
-        menu_height = footer - Scale(8n) - history_top - Scale(68n);
-        if (menu_height < menu_row) {
-            menu_height = menu_row;
-        }
-    }
-    let menu_top = footer - Scale(8n) - menu_height;
-    if (menu_count > 0n) {
-        suggestions_top = menu_top;
-    } else {
-        State.menu_scroll = 0n;
-    }
-    let chat_height = suggestions_top - history_top - Scale(8n);
-    if (chat_height < Scale(60n)) {
-        chat_height = Scale(60n);
-    }
-    if (State.frame.follow_end) {
-        State.frame.scroll = 1000000n;
-    }
-    let typing = State.frame.waiting && !State.frame.typing_pause;
-    let typing_height = typing ? Scale(70n) : 0n;
-    let history = Scroll({
-        session: State.frame.session,
-        props: {
-            key: 300100n,
-            bounds: Bounds(x, history_top, width, chat_height),
-            content_height: State.frame.history_height + typing_height,
-            scroll_offset: State.frame.scroll,
-            scale: State.frame.scale
-        },
-        children: (scroll: NativeScroll.ScrollResult): void => {
-            ChatHistory(scroll, x, width, history_top + chat_height, typing);
-        }
-    });
-    if (!history.opened) {
-        SetHistoryScroll(history);
-    }
-    let load_older =
-        State.frame.has_older &&
-        (history.max_scroll <= 0n || (!State.frame.follow_end && State.frame.scroll <= Scale(96n)));
-    if (State.sweeping && State.sweep_seen) {
-        let edge = float32(Scale(56n));
-        let top_edge = float32(Scale(60n)) + edge;
-        let bottom_edge = float32(history_top + chat_height) - edge;
-        if (State.sweep_pointer_y < top_edge) {
-            let step = s32((top_edge - State.sweep_pointer_y) / 3.0) + Scale(4n);
-            if (step > Scale(40n)) {
-                step = Scale(40n);
-            }
-            State.frame.scroll = State.frame.scroll - step;
-            if (State.frame.scroll < 0n) {
-                State.frame.scroll = 0n;
-            }
-            State.frame.follow_end = false;
-        } else if (State.sweep_pointer_y > bottom_edge) {
-            let step = s32((State.sweep_pointer_y - bottom_edge) / 3.0) + Scale(4n);
-            if (step > Scale(40n)) {
-                step = Scale(40n);
-            }
-            State.frame.scroll = State.frame.scroll + step;
-        }
-    }
-    State.sweep_seen = false;
-    if (State.selecting && State.selected_count <= 0n && !State.sweeping) {
-        SelectionClear();
-    }
-    if (State.selecting) {
-        SelectionBar(x, Scale(12n), width);
-    }
-    let typed = LumiTrim(State.frame.value);
+    revision: s64,
+    menu_count: s32,
+    x: s32,
+    width: s32,
+    suggestions_top: s32
+): boolean {
+    let typed = LumiTrim(DraftText());
     let candidates: [
         string,
         string,
@@ -1265,6 +1164,143 @@ export function LumiViewComposition(
             ) || selected;
         suggestion_count += 1n;
     }
+    return selected;
+}
+
+export function LumiViewComposition(
+    message: LumiMessage,
+    commands: LumiCommands,
+    revision: s64
+): LumiMessage {
+    // Read the host frame here and keep its strings in this local, while the
+    // global frame takes only scalars and the draft moves into model-owned
+    // storage, so no host scratch view is ever retained across frames.
+    let host = ReadLumiUiHost();
+    State.frame = LumiFrameScalars(host);
+    StoreLumiDraft(host.value);
+    let title_height = LumiTitleBar();
+    if (State.frame.agreement !== 0n) {
+        LumiAgreementView(title_height + Scale(8n), host.agreement_text);
+        WriteLumiFrame(host.provider_host, host.agreement_text, host.clipboard_text, host.input);
+        return message;
+    }
+    let column = NativeLayout.CenteredColumnFor(State.frame.width, Scale(720n), Scale(16n));
+    let x = column.x;
+    let width = column.width;
+    let input_height = Scale(48n);
+    let measured_height = State.frame.draft_height + Scale(24n);
+    if (measured_height > input_height) {
+        input_height = measured_height;
+    }
+    if (input_height > Scale(144n)) {
+        input_height = Scale(144n);
+    }
+    let footer = State.frame.height - State.frame.bottom - Scale(16n) - input_height;
+    let suggestions_top = footer - Scale(LumiTrim(DraftText()).count > 0n ? 46n : 0n);
+    let history_top = title_height + Scale(8n);
+    let menu = MenuCommands(revision);
+    let menu_matches = NewMenuMatches();
+    let menu_count: s32 = s32(0n);
+    let menu_target: s32 = s32(-1n);
+    if (MenuOpen(DraftText())) {
+        for (let index: s32 = s32(0n); index < LUMI_MENU_COMMANDS; index += 1n) {
+            let command = nativeAt(menu, index);
+            if (
+                (command.requirement !== 0n &&
+                    FlagIntersection(State.frame.available_apps, command.requirement) === 0n) ||
+                (command.choice_only &&
+                    !State.frame.choosing_habit &&
+                    !State.frame.choosing_diary) ||
+                !LumiStarts(command.name, DraftText())
+            ) {
+                continue;
+            }
+            if (menu_target < 0n || LumiEqual(command.name, DraftText())) {
+                menu_target = menu_count;
+            }
+            nativeSet(menu_matches, menu_count, index);
+            menu_count += 1n;
+        }
+    }
+    let menu_row = Scale(44n);
+    let menu_height = menu_count * menu_row;
+    if (menu_height > (menu_row * 9n) / 2n) {
+        menu_height = (menu_row * 9n) / 2n;
+    }
+    if (menu_count > 0n && footer - Scale(8n) - menu_height - history_top < Scale(68n)) {
+        menu_height = footer - Scale(8n) - history_top - Scale(68n);
+        if (menu_height < menu_row) {
+            menu_height = menu_row;
+        }
+    }
+    let menu_top = footer - Scale(8n) - menu_height;
+    if (menu_count > 0n) {
+        suggestions_top = menu_top;
+    } else {
+        State.menu_scroll = 0n;
+    }
+    let chat_height = suggestions_top - history_top - Scale(8n);
+    if (chat_height < Scale(60n)) {
+        chat_height = Scale(60n);
+    }
+    if (State.frame.follow_end) {
+        State.frame.scroll = 1000000n;
+    }
+    let typing = State.frame.waiting && !State.frame.typing_pause;
+    let typing_height = typing ? Scale(70n) : 0n;
+    let history = Scroll({
+        session: State.frame.session,
+        props: {
+            key: 300100n,
+            bounds: Bounds(x, history_top, width, chat_height),
+            content_height: State.frame.history_height + typing_height,
+            scroll_offset: State.frame.scroll,
+            scale: State.frame.scale
+        },
+        children: (scroll: NativeScroll.ScrollResult): void => {
+            ChatHistory(scroll, x, width, history_top + chat_height, typing);
+        }
+    });
+    if (!history.opened) {
+        SetHistoryScroll(history);
+    }
+    let load_older =
+        State.frame.has_older &&
+        (history.max_scroll <= 0n || (!State.frame.follow_end && State.frame.scroll <= Scale(96n)));
+    if (State.sweeping && State.sweep_seen) {
+        let edge = float32(Scale(56n));
+        let top_edge = float32(Scale(60n)) + edge;
+        let bottom_edge = float32(history_top + chat_height) - edge;
+        if (State.sweep_pointer_y < top_edge) {
+            let step = s32((top_edge - State.sweep_pointer_y) / 3.0) + Scale(4n);
+            if (step > Scale(40n)) {
+                step = Scale(40n);
+            }
+            State.frame.scroll = State.frame.scroll - step;
+            if (State.frame.scroll < 0n) {
+                State.frame.scroll = 0n;
+            }
+            State.frame.follow_end = false;
+        } else if (State.sweep_pointer_y > bottom_edge) {
+            let step = s32((State.sweep_pointer_y - bottom_edge) / 3.0) + Scale(4n);
+            if (step > Scale(40n)) {
+                step = Scale(40n);
+            }
+            State.frame.scroll = State.frame.scroll + step;
+        }
+    }
+    State.sweep_seen = false;
+    if (State.selecting && State.selected_count <= 0n && !State.sweeping) {
+        SelectionClear();
+    }
+    if (State.selecting) {
+        SelectionBar(x, Scale(12n), width);
+    }
+    let selected = DraftSuggestions(commands, revision, menu_count, x, width, suggestions_top);
+    // Pressed suggestions fill the draft here, after the composer's last
+    // borrowed read of the draft text above, so filling cannot free a live
+    // view.
+    ApplyPendingLumiDraft();
     let chosen: s32 = s32(-1n);
     if (menu_count > 0n) {
         <Box
@@ -1276,82 +1312,87 @@ export function LumiViewComposition(
                 radius: float32(Scale(12n))
             }}
         />;
-        let menu_list = NativeScroll.Draw(State.frame.session, {
-            key: u64(360001n),
-            bounds: Bounds(x, menu_top, width, menu_height),
-            content_height: menu_count * menu_row,
-            scroll_offset: State.menu_scroll,
-            scale: State.frame.scale
-        });
-        State.menu_scroll = menu_list.scroll_offset;
-        if (menu_list.opened) {
-            let name_width = Scale(104n);
-            for (let row: s32 = s32(0n); row < menu_count; row += s32(1)) {
-                let top = s32(menu_list.content.y) + row * menu_row;
-                if (top + menu_row < menu_top || top > menu_top + menu_height) {
-                    continue;
-                }
-                let index = nativeAt(menu_matches, row);
-                let command = nativeAt(menu, index);
-                let key = 360100n + index * 4n;
-                if (row === menu_target) {
-                    <Box
+        let menu_list = Scroll({
+            session: State.frame.session,
+            props: {
+                key: u64(360001n),
+                bounds: Bounds(x, menu_top, width, menu_height),
+                content_height: menu_count * menu_row,
+                scroll_offset: State.menu_scroll,
+                scale: State.frame.scale
+            },
+            children: (menu_list: NativeScroll.ScrollResult): void => {
+                State.menu_scroll = menu_list.scroll_offset;
+                let name_width = Scale(104n);
+                for (let row: s32 = s32(0n); row < menu_count; row += s32(1)) {
+                    let top = s32(menu_list.content.y) + row * menu_row;
+                    if (top + menu_row < menu_top || top > menu_top + menu_height) {
+                        continue;
+                    }
+                    let index = nativeAt(menu_matches, row);
+                    let command = nativeAt(menu, index);
+                    let key = 360100n + index * 4n;
+                    if (row === menu_target) {
+                        <Box
+                            session={State.frame.session}
+                            props={{
+                                key: u64(key),
+                                bounds: Bounds(x, top, width, menu_row),
+                                fill: { r: 156n, g: 188n, b: 143n, a: 48n },
+                                radius: float32(Scale(12n))
+                            }}
+                        />;
+                    }
+                    if (
+                        Button({
+                            session: State.frame.session,
+                            props: {
+                                id: 360200n + index,
+                                bounds: Bounds(x, top, width, menu_row),
+                                invisible: true,
+                                label: command.description
+                            }
+                        })
+                    ) {
+                        chosen = index;
+                    }
+                    let strong: [NativeText.Range] = [{ start: 0n, end: s32(command.name.count) }];
+                    <Text
                         session={State.frame.session}
                         props={{
-                            key: u64(key),
-                            bounds: Bounds(x, top, width, menu_row),
-                            fill: { r: 156n, g: 188n, b: 143n, a: 48n },
-                            radius: float32(Scale(12n))
+                            key: u64(key + 1n),
+                            bounds: Bounds(x + Scale(16n), top, name_width, menu_row),
+                            text: command.name,
+                            size: State.frame.font,
+                            strong: nativeSlice(strong),
+                            wrap: NativeText.Wrap.TextWrapNone,
+                            vertical_align: TextAlign.TextAlignCenter
+                        }}
+                    />;
+                    <Text
+                        session={State.frame.session}
+                        props={{
+                            key: u64(key + 2n),
+                            bounds: Bounds(
+                                x + Scale(16n) + name_width,
+                                top,
+                                width - Scale(32n) - name_width,
+                                menu_row
+                            ),
+                            text: command.description,
+                            size: Scale(14n),
+                            wrap: NativeText.Wrap.TextWrapAuto,
+                            vertical_align: TextAlign.TextAlignCenter
                         }}
                     />;
                 }
-                if (
-                    Button({
-                        session: State.frame.session,
-                        props: {
-                            id: 360200n + index,
-                            bounds: Bounds(x, top, width, menu_row),
-                            invisible: true,
-                            label: command.description
-                        }
-                    })
-                ) {
-                    chosen = index;
-                }
-                let strong: [NativeText.Range] = [{ start: 0n, end: s32(command.name.count) }];
-                <Text
-                    session={State.frame.session}
-                    props={{
-                        key: u64(key + 1n),
-                        bounds: Bounds(x + Scale(16n), top, name_width, menu_row),
-                        text: command.name,
-                        size: State.frame.font,
-                        strong: nativeSlice(strong),
-                        wrap: NativeText.Wrap.TextWrapNone,
-                        vertical_align: TextAlign.TextAlignCenter
-                    }}
-                />;
-                <Text
-                    session={State.frame.session}
-                    props={{
-                        key: u64(key + 2n),
-                        bounds: Bounds(
-                            x + Scale(16n) + name_width,
-                            top,
-                            width - Scale(32n) - name_width,
-                            menu_row
-                        ),
-                        text: command.description,
-                        size: Scale(14n),
-                        wrap: NativeText.Wrap.TextWrapAuto,
-                        vertical_align: TextAlign.TextAlignCenter
-                    }}
-                />;
             }
-            End(State.frame.session);
+        });
+        if (!menu_list.opened) {
+            State.menu_scroll = menu_list.scroll_offset;
         }
     }
-    let show_commands = LumiTrim(State.frame.value).count === 0n;
+    let show_commands = LumiTrim(DraftText()).count === 0n;
     if (
         show_commands &&
         Button({
@@ -1373,67 +1414,85 @@ export function LumiViewComposition(
     if (selected || chosen >= 0n) {
         State.focus_request = 2n;
     }
-    let field_input = State.frame.input;
+    let field_input = host.input;
     if (State.focus_request > 0n) {
         field_input.focus = true;
         State.focus_request = State.focus_request - 1n;
     }
-    let field = TextArea({
-        session: State.frame.session,
-        props: {
-            key: u64(300200n),
-            focus_id: 30010n,
-            bounds: Bounds(x, footer, width - Scale(56n), input_height),
-            value: State.frame.value,
-            placeholder: LumiViewLocaleHost("lumi_placeholder"),
-            label: "Lumi",
-            cursor: State.frame.cursor,
-            anchor: State.frame.anchor,
-            scroll_y: State.frame.input_scroll,
-            selecting: State.frame.selecting,
-            preferred_x: State.frame.preferred_x,
-            preferred_x_valid: State.frame.preferred_x_valid,
-            wrap: true,
-            focused: State.frame.focused,
-            input: field_input,
-            max_bytes: LUMI_INPUT_MAX - 1n,
-            max_codepoints: LUMI_INPUT_MAX - 1n
-        }
-    });
-    if (!selected) {
-        if (
-            field.edit.changed &&
-            field.edit.start >= 0n &&
-            field.edit.end >= field.edit.start &&
-            field.edit.end <= State.frame.value.count
-        ) {
-            let replacement = ApplyDraftEdit(
-                field.edit.start,
-                field.edit.end,
-                field.edit.replacement
-            );
-            if (replacement.count < LUMI_INPUT_MAX) {
-                State.frame.value = replacement;
+    // Keep the area result inside this block: its owned snapshots are taken
+    // here and applied after the block ends, so no view of the host's
+    // per-frame text request scratch crosses the area's scope.
+    let edit_keep: LumiEditKeep = {};
+    let clipboard_keep: LumiClipboardKeep = {};
+    let clipboard_write = false;
+    let committed = false;
+    {
+        let field = TextArea({
+            session: State.frame.session,
+            props: {
+                key: u64(300200n),
+                focus_id: 30010n,
+                bounds: Bounds(x, footer, width - Scale(56n), input_height),
+                value: DraftText(),
+                placeholder: LumiViewLocaleHost("lumi_placeholder"),
+                label: "Lumi",
+                cursor: State.frame.cursor,
+                anchor: State.frame.anchor,
+                scroll_y: State.frame.input_scroll,
+                selecting: State.frame.selecting,
+                preferred_x: State.frame.preferred_x,
+                preferred_x_valid: State.frame.preferred_x_valid,
+                wrap: true,
+                focused: State.frame.focused,
+                input: field_input,
+                max_bytes: LUMI_INPUT_MAX - 1n,
+                max_codepoints: LUMI_INPUT_MAX - 1n
             }
+        });
+        if (!selected) {
+            if (
+                field.edit.changed &&
+                field.edit.start >= 0n &&
+                field.edit.end >= field.edit.start &&
+                field.edit.end <= DraftText().count
+            ) {
+                let fresh_edit = LumiEditUpdate(field);
+                DiscardLumiEdit(edit_keep);
+                edit_keep = fresh_edit;
+            }
+            State.frame.cursor = field.cursor;
+            State.frame.anchor = field.anchor;
+            State.frame.input_scroll = field.scroll_y;
+            State.frame.selecting = field.selecting;
+            State.frame.preferred_x = field.preferred_x;
+            State.frame.preferred_x_valid = field.preferred_x_valid;
+            State.frame.focused = field.focused;
         }
-        State.frame.cursor = field.cursor;
-        State.frame.anchor = field.anchor;
-        State.frame.input_scroll = field.scroll_y;
-        State.frame.selecting = field.selecting;
-        State.frame.preferred_x = field.preferred_x;
-        State.frame.preferred_x_valid = field.preferred_x_valid;
-        State.frame.focused = field.focused;
+        clipboard_write = field.clipboard_write;
+        if (clipboard_write) {
+            let fresh_clipboard = LumiClipboardUpdate(field);
+            DiscardLumiClipboard(clipboard_keep);
+            clipboard_keep = fresh_clipboard;
+        }
+        committed = field.committed;
+    }
+    if (!selected) {
+        ApplyLumiEdit(edit_keep);
+    }
+    let clipboard_text = "";
+    if (clipboard_keep.valid) {
+        clipboard_text = TextView(clipboard_keep.text);
     }
     let copy_row = RowMenu();
-    State.frame.clipboard_write = field.clipboard_write;
-    State.frame.clipboard_text = field.clipboard_text;
+    State.frame.clipboard_write = clipboard_write;
     if (State.copy_pending) {
         State.frame.clipboard_write = true;
-        State.frame.clipboard_text = State.pending_copy;
+        clipboard_text = State.pending_copy;
         State.copy_pending = false;
     }
     if (copy_row >= 0n) {
-        CopyChatRow(copy_row);
+        State.frame.clipboard_write = true;
+        clipboard_text = CopyChatRow(copy_row);
     }
     let send =
         !show_commands &&
@@ -1449,7 +1508,7 @@ export function LumiViewComposition(
                 emphasis: ButtonEmphasis.ButtonEmphasisGhost
             }
         });
-    if (chosen < 0n && field.committed && !send && menu_target >= 0n && !selected) {
+    if (chosen < 0n && committed && !send && menu_target >= 0n && !selected) {
         chosen = nativeAt(menu_matches, menu_target);
     }
     let submit = "";
@@ -1460,13 +1519,13 @@ export function LumiViewComposition(
         } else {
             submit = text;
         }
-    } else if ((send || field.committed) && LumiTrim(State.frame.value).count > 0n && !selected) {
-        submit = State.frame.value;
+    } else if ((send || committed) && LumiTrim(DraftText()).count > 0n && !selected) {
+        submit = CopyLumiText(DraftText());
     }
     if (submit.count > 0n) {
         message.action = LUMI_SEND;
-        message.input = CopyLumiText(submit);
-        State.frame.value = "";
+        message.input = submit;
+        ClearLumiDraft();
         State.frame.cursor = 0n;
         State.frame.anchor = 0n;
         State.frame.input_scroll = 0n;
@@ -1477,7 +1536,7 @@ export function LumiViewComposition(
         State.frame.scroll = 1000000n;
         State.frame.follow_end = true;
     }
-    WriteLumiUiHost(State.frame);
+    WriteLumiFrame(host.provider_host, host.agreement_text, clipboard_text, host.input);
     if (message.action !== LUMI_SEND && load_older) {
         LumiLoadOlderHost();
     }

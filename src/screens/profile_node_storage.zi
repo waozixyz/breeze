@@ -22,6 +22,7 @@ ProfileNodeCard :: struct {
     storage: SyncNodeStorage
     media: bool
     active: bool
+    name: string
     usage: string
     percent: string
     status: string
@@ -50,8 +51,13 @@ ProfileNodeStorageSize :: (bytes: s64, output: []u8) -> string {
 
 // Texts and height of one node's card; drawing and measuring share it.
 ProfileNodeCardFor :: (app: *InnerBreeze, address: string, active: string,
-    media_bytes: s64, width: s32) -> ProfileNodeCard {
+    media_bytes: s64, width: s32, include_name: bool = false) -> ProfileNodeCard {
     card: ProfileNodeCard
+    usage: FrameTextRange
+    percent: FrameTextRange
+    status: FrameTextRange
+    photos_text: FrameTextRange
+    name: FrameTextRange
     card.storage = SyncNodeStorageRead(address)
     card.media = SyncNodeMediaUpload(address)
     card.active = SyncNodeSameAddress(address, active)
@@ -60,38 +66,46 @@ ProfileNodeCardFor :: (app: *InnerBreeze, address: string, active: string,
     line: [192]u8
     storage := card.storage
     if !storage.known {
-        card.usage = LocaleText("profile_node_storage_unknown")
+        usage = FrameTextSave(*app.ui.frame_text, LocaleText("profile_node_storage_unknown"))
     } else if storage.limit_bytes > 0 {
         args: [2]FormatArg = .[
-            FormatArg.{.text = ProfileNodeStorageSize(storage.used_bytes, used[:]), .is_text = true},
-            FormatArg.{.text = ProfileNodeStorageSize(storage.limit_bytes, limit[:]), .is_text = true}]
+        FormatArg.{.text = ProfileNodeStorageSize(storage.used_bytes, used[:]), .is_text = true},
+        FormatArg.{.text = ProfileNodeStorageSize(storage.limit_bytes, limit[:]), .is_text = true}]
         unused FormatTemplate(LocaleText("profile_node_storage_used_of"), args[:], line[:])
-        card.usage = ProfileNodeStorageHold(app, AppTextFromCString(*line[0], 192))
-        percent: [16]u8
-        unused FormatNumberTemplate("%d%%", SyncNodeStoragePercent(storage), percent[:])
-        card.percent = ProfileNodeStorageHold(app, AppTextFromCString(*percent[0], 16))
+        usage = FrameTextSave(*app.ui.frame_text, AppTextFromCString(*line[0], 192))
+        percent_buffer: [16]u8
+        unused FormatNumberTemplate("%d%%", SyncNodeStoragePercent(storage), percent_buffer[:])
+        percent = FrameTextSave(*app.ui.frame_text, AppTextFromCString(*percent_buffer[0], 16))
     } else {
         args: [1]FormatArg = .[
-            FormatArg.{.text = ProfileNodeStorageSize(storage.used_bytes, used[:]), .is_text = true}]
+        FormatArg.{.text = ProfileNodeStorageSize(storage.used_bytes, used[:]), .is_text = true}]
         unused FormatTemplate(LocaleText("profile_node_storage_used_unlimited"), args[:], line[:])
-        card.usage = ProfileNodeStorageHold(app, AppTextFromCString(*line[0], 192))
+        usage = FrameTextSave(*app.ui.frame_text, AppTextFromCString(*line[0], 192))
     }
     if storage.full || (storage.limit_bytes > 0 && storage.used_bytes >= storage.limit_bytes) {
-        card.status = LocaleText(ifx card.media then "profile_node_storage_full_media"
-            else "profile_node_storage_full")
+        status = FrameTextSave(*app.ui.frame_text, LocaleText(ifx card.media then "profile_node_storage_full_media"
+            else "profile_node_storage_full"))
         card.status_class = "storage-full"
     } else if SyncNodeStorageNearlyFull(storage) {
-        card.status = LocaleText(ifx card.media then "profile_node_storage_nearly_full_media"
-            else "profile_node_storage_nearly_full")
+        status = FrameTextSave(*app.ui.frame_text, LocaleText(ifx card.media then "profile_node_storage_nearly_full_media"
+            else "profile_node_storage_nearly_full"))
         card.status_class = "storage-warning"
     }
     if card.media && media_bytes > 0 {
         photos: [32]u8
         args: [1]FormatArg = .[
-            FormatArg.{.text = ProfileNodeStorageSize(media_bytes, photos[:]), .is_text = true}]
+        FormatArg.{.text = ProfileNodeStorageSize(media_bytes, photos[:]), .is_text = true}]
         unused FormatTemplate(LocaleText("profile_node_storage_photos"), args[:], line[:])
-        card.photos = ProfileNodeStorageHold(app, AppTextFromCString(*line[0], 192))
+        photos_text = FrameTextSave(*app.ui.frame_text, AppTextFromCString(*line[0], 192))
     }
+    if include_name {
+        name = FrameTextSave(*app.ui.frame_text, SyncNodeDisplayName(address))
+    }
+    card.usage = FrameTextRead(*app.ui.frame_text, usage)
+    card.percent = FrameTextRead(*app.ui.frame_text, percent)
+    card.status = FrameTextRead(*app.ui.frame_text, status)
+    card.photos = FrameTextRead(*app.ui.frame_text, photos_text)
+    card.name = FrameTextRead(*app.ui.frame_text, name)
     inner := width - ProfileNodeStoragePad() * 2
     small := AppSmallFontSize()
     height := ProfileNodeStoragePad() + AppScale(28)
@@ -158,14 +172,14 @@ ProfileNodeStorageSetMedia :: (app: *InnerBreeze, address: string, enabled: bool
     }
 }
 
-ProfileNodeStorageActive :: (app: *InnerBreeze) -> string {
-    return FrameTextHold(*app.ui.frame_text, storage_get_setting_text("sync_server_url"))
+// The active address is compared while cards append their painted labels to
+// frame text. Keep this query in separate owned storage; the view frees it.
+ProfileNodeStorageActive :: () -> string {
+    return PackageText(storage_get_setting_text("sync_server_url"), "")
 }
 
-ProfileNodeStorageAddress :: (app: *InnerBreeze, index: s32) -> string {
-    address := SyncNodeAt(index)
-    defer { PackageFree(address) }
-    return FrameTextHold(*app.ui.frame_text, address)
+ProfileNodeStorageAddress :: (index: s32) -> string {
+    return SyncNodeAt(index)
 }
 
 #program_export

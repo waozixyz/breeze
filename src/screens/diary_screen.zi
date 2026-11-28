@@ -12,6 +12,7 @@
 #import, file "../apps/app_codec.zi";
 #import, file "../apps/value_codec.zi";
 Image :: #import "kryon/image";
+TextArea :: #import "kryon/text_area";
 #import, file "../apps/diary_store.zi";
 #import, file "../../apps/diary/src/native/diary_history.zi";
 #import, file "../apps/diary_spelling.zi";
@@ -53,6 +54,11 @@ using ButtonEmphasis;
 diary_state: DiaryMessage;
 diary_loaded: bool;
 diary_focused: bool;
+DiaryUiContext :: struct {
+    app: *InnerBreeze
+    input: TextArea.Input
+}
+
 diary_ui: DiaryUiFrame;
 diary_ui_codec: WidgetDiaryUiFrameCodec;
 diary_selecting: bool;
@@ -320,15 +326,18 @@ using HostValueKind;
 
 DiaryUiCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    host := cast(*DiaryUiContext)context
     if AppModule(TextFromCString(module)) {
-        return DiaryPortableUiCall(context, module, function, arguments, count, result)
+        return DiaryPortableUiCall(cast(*void)host.app, module, function, arguments, count, result)
     }
     if TextFromCString(module) != "diary_view" {
-        return WidgetHostCall(context, module, function, arguments, count, result)
+        return WidgetHostCall(cast(*void)host.app, module, function, arguments, count, result)
     }
     name := TextFromCString(function)
     if name == "ReadDiaryUiHost" && count == 0 {
-        result.* = WidgetEncodeDiaryUiFrame(diary_ui, *diary_ui_codec)
+        frame := diary_ui
+        frame.input = host.input
+        result.* = WidgetEncodeDiaryUiFrame(frame, *diary_ui_codec)
         return 1
     }
     if name == "WriteDiaryUiHost" && count == 1 && WidgetValidDiaryUiFrame(arguments[0]) {
@@ -351,10 +360,14 @@ DiaryUiCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "DiaryLocaleHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleText(key)
-        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
-            .data = HostTextData(text), .length = cast(usize)text.count}
+        reply: HostValue
+        {
+            key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            text := LocaleText(key)
+            reply = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+                .data = HostTextData(text), .length = cast(usize)text.count}
+        }
+        result.* = reply
         return 1
     }
     if name == "DiaryPhotoHost" && count == 1 &&
@@ -482,7 +495,8 @@ diary_screen_draw :: (app: *InnerBreeze) {
                 cast(float32)(app.ui.view_height - app_content_bottom_reserved(app))},
             app.dark_mode != 0, MetricsScale(), AppFontSize(), input)
         WidgetHostBegin(app.ui.session, HostedAssetAllowed)
-        AppsUiBegin(DiaryUiCall, cast(*void)app)
+        host := DiaryUiContext.{.app = app}
+        AppsUiBegin(DiaryUiCall, cast(*void)(*host))
         diary_state.action = DIARY_FRAME
         diary_state = DiaryRun(diary_state)
         diary_loaded = diary_state.succeeded
@@ -524,9 +538,10 @@ diary_screen_draw :: (app: *InnerBreeze) {
     diary_ui.clipboard_write = false
     diary_ui.clipboard_text = ""
     typed: [512]u8
-    diary_ui.input = SampleTextAreaInput(diary_focused, typed[:])
+    input := SampleTextAreaInput(diary_focused, typed[:])
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
-    AppsUiBegin(DiaryUiCall, cast(*void)app)
+    host := DiaryUiContext.{.app = app, .input = input}
+    AppsUiBegin(DiaryUiCall, cast(*void)(*host))
     diary_state.action = DIARY_FRAME
     diary_state = DiaryRun(diary_state)
     AppsUiEnd()
@@ -552,28 +567,31 @@ DiaryPortableUiCall :: (context: *void, module: *u8, function: *u8,
         return 1
     }
     if name != "AppServiceHost" || count != 2 { return 0 }
+    reply, handled := DiaryPortableServiceReply(arguments)
+    if handled != 0 { result.* = reply }
+    return handled
+}
+
+#scope_file
+DiaryPortableServiceReply :: (arguments: *HostValue) -> (reply: HostValue, handled: s32) {
     service := AppArgumentText(arguments[0])
     request := AppArgumentText(arguments[1])
     if service == "media.compression.open" {
         MediaCompressionRequest()
-        result.* = NodeAppString("queued")
-        return 1
+        return NodeAppString("queued"), 1
     }
     if service == "media.asset" {
-        result.* = NodeAppString(DiaryPhotoAsset(request))
-        return 1
+        return NodeAppString(DiaryPhotoAsset(request)), 1
     }
     if service == "media.pick" {
         diary_photo_requested = true
         PackageFree(diary_photo_result)
         diary_photo_result = PackageText("{\"status\":\"pending\"}", "")
-        result.* = NodeAppString(diary_photo_result)
-        return 1
+        return NodeAppString(diary_photo_result), 1
     }
     if service == "media.pick.status" {
         value := ifx diary_photo_error then "{\"status\":\"failed\"}" else diary_photo_result
-        result.* = NodeAppString(value)
-        return 1
+        return NodeAppString(value), 1
     }
     if service == "media.query" {
         rows := MediaQuery(request, false)
@@ -596,8 +614,7 @@ DiaryPortableUiCall :: (context: *void, module: *u8, function: *u8,
         BuilderPrint(*output, "]")
         PackageFree(diary_service_value)
         diary_service_value = BuilderFinish(output)
-        result.* = NodeAppString(diary_service_value)
-        return 1
+        return NodeAppString(diary_service_value), 1
     }
     if service == "text.correct.start" {
         notice := DiarySpellingStart(request)
@@ -607,8 +624,7 @@ DiaryPortableUiCall :: (context: *void, module: *u8, function: *u8,
         BuilderPrint(*output, "}")
         PackageFree(diary_service_value)
         diary_service_value = BuilderFinish(output)
-        result.* = NodeAppString(diary_service_value)
-        return 1
+        return NodeAppString(diary_service_value), 1
     }
     if service == "text.correct.poll" {
         polled := DiarySpellingPoll()
@@ -620,8 +636,7 @@ DiaryPortableUiCall :: (context: *void, module: *u8, function: *u8,
         BuilderPrint(*output, "}")
         PackageFree(diary_service_value)
         diary_service_value = BuilderFinish(output)
-        result.* = NodeAppString(diary_service_value)
-        return 1
+        return NodeAppString(diary_service_value), 1
     }
-    return 0
+    return HostValue.{}, 0
 }

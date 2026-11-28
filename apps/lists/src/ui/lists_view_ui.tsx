@@ -1,3 +1,4 @@
+import { ResolvedModal } from "kryon/tsx/modal";
 // Authored application UI. Native state and effects live in lists_view.zi.
 import * as NativeBackIcon from "mingcute/mingcute_regular_arrow_left";
 import * as NativeContextMenu from "kryon/context_menu";
@@ -303,7 +304,7 @@ function InviteField(x: s32, y: s32, width: s32, disabled: boolean): boolean {
     }
     if (edited.clipboard_write) {
         State.frame.clipboard_write = true;
-        State.frame.clipboard_text = edited.clipboard_text;
+        State.frame.clipboard_text = Copied(edited.clipboard_text);
     }
     if (edited.escaped) {
         State.invite_suggestions = false;
@@ -594,71 +595,67 @@ export function InvitationsDialog(): void {
         height = State.frame.height - State.frame.bottom - Scale(32n);
     }
     // The modal frame supplies dismiss results and the resolved content bounds.
-    let dialog = NativeModal.Draw(State.frame.session, {
-        key: u64(6520n),
-        title: ListsLocaleHost("elist_invitations"),
-        width: width,
-        height: height,
-        scale: State.frame.scale,
-        has_right_action: true,
-        right_label: ListsLocaleHost("close_button")
+    let dialog = ResolvedModal({
+        session: State.frame.session,
+        props: {
+            key: u64(6520n),
+            title: ListsLocaleHost("elist_invitations"),
+            width: width,
+            height: height,
+            scale: State.frame.scale,
+            has_right_action: true,
+            right_label: ListsLocaleHost("close_button")
+        },
+        children: (dialog: NativeModal.ModalFrameResult): void => {
+            let x = s32(dialog.layout.content.x);
+            let y = s32(dialog.layout.content.y);
+            let content_width = s32(dialog.layout.content.width);
+            let bottom = s32(dialog.layout.content.y + dialog.layout.content.height);
+            let disabled = State.frame.sharing_busy || State.frame.sharing_pending;
+            <Text
+                session={State.frame.session}
+                props={{
+                    bounds: Bounds(x, y, content_width, Scale(32n)),
+                    text: detail,
+                    wrap: NativeText.Wrap.TextWrapAuto
+                }}
+            />;
+            y += Scale(40n);
+            if (!State.frame.connected) {
+                return;
+            }
+            if (count === 0n) {
+                <Text
+                    session={State.frame.session}
+                    props={{
+                        bounds: Bounds(x, y, content_width, Scale(44n)),
+                        text: ListsLocaleHost("elist_no_invitations"),
+                        wrap: NativeText.Wrap.TextWrapAuto
+                    }}
+                />;
+                return;
+            }
+            let invitations = Scroll({
+                session: State.frame.session,
+                props: {
+                    key: 6512n,
+                    bounds: Bounds(x, y, content_width, bottom - y),
+                    content_height: count * row_height,
+                    scroll_offset: State.sharing_scroll
+                },
+                children: (scroll: NativeScroll.ScrollResult): void => {
+                    InvitationRows(scroll, x, content_width, row_height, disabled);
+                }
+            });
+            State.sharing_scroll = invitations.scroll_offset;
+        }
     });
     if (dialog.dismissed || dialog.right_clicked) {
-        if (dialog.opened) {
-            End(State.frame.session);
-        }
         State.frame.panel = 0n;
         State.frame.focused = false;
         State.sharing_scroll = 0n;
         return;
     }
-    if (!dialog.opened) {
-        return;
-    }
-    let x = s32(dialog.layout.content.x);
-    let y = s32(dialog.layout.content.y);
-    let content_width = s32(dialog.layout.content.width);
-    let bottom = s32(dialog.layout.content.y + dialog.layout.content.height);
-    let disabled = State.frame.sharing_busy || State.frame.sharing_pending;
-    <Text
-        session={State.frame.session}
-        props={{
-            bounds: Bounds(x, y, content_width, Scale(32n)),
-            text: detail,
-            wrap: NativeText.Wrap.TextWrapAuto
-        }}
-    />;
-    y += Scale(40n);
-    if (!State.frame.connected) {
-        End(State.frame.session);
-        return;
-    }
-    if (count === 0n) {
-        <Text
-            session={State.frame.session}
-            props={{
-                bounds: Bounds(x, y, content_width, Scale(44n)),
-                text: ListsLocaleHost("elist_no_invitations"),
-                wrap: NativeText.Wrap.TextWrapAuto
-            }}
-        />;
-        End(State.frame.session);
-        return;
-    }
-    let invitations = Scroll({
-        session: State.frame.session,
-        props: {
-            key: 6512n,
-            bounds: Bounds(x, y, content_width, bottom - y),
-            content_height: count * row_height,
-            scroll_offset: State.sharing_scroll
-        },
-        children: (scroll: NativeScroll.ScrollResult): void => {
-            InvitationRows(scroll, x, content_width, row_height, disabled);
-        }
-    });
-    State.sharing_scroll = invitations.scroll_offset;
-    End(State.frame.session);
 }
 
 function InvitationRows(
@@ -700,48 +697,52 @@ export function CustomTaskDialog(): void {
         height = available;
     }
     // The modal frame supplies dismiss results and the resolved content bounds.
-    let dialog = NativeModal.Draw(State.frame.session, {
-        key: u64(6550n),
-        title: ListsLocaleHost("elist_custom_task"),
-        width: width,
-        height: height,
-        scale: State.frame.scale
+    let dialog = ResolvedModal({
+        session: State.frame.session,
+        props: {
+            key: u64(6550n),
+            title: ListsLocaleHost("elist_custom_task"),
+            width: width,
+            height: height,
+            scale: State.frame.scale
+        },
+        children: (dialog: NativeModal.ModalFrameResult): void => {
+            let current: ListsUiRow = {};
+            let blocked = State.frame.sharing_busy || State.frame.sharing_pending;
+            if (
+                State.state.selected_list >= 0n &&
+                State.state.selected_list < State.state.list_count
+            ) {
+                current = ReadListsRowHost(State.state.selected_list, false);
+                blocked = blocked || current.read_only || current.incomplete;
+            } else {
+                blocked = true;
+            }
+            let x = s32(dialog.layout.content.x);
+            let y = s32(dialog.layout.content.y);
+            let content_width = s32(dialog.layout.content.width);
+            let fields = Scroll({
+                session: State.frame.session,
+                props: {
+                    key: 6555n,
+                    bounds: Bounds(x, y, content_width, s32(dialog.layout.content.height)),
+                    content_height: Scale(350n),
+                    scroll_offset: State.custom_task_scroll,
+                    scale: State.frame.scale
+                },
+                children: (scroll: NativeScroll.ScrollResult): void => {
+                    CustomTaskFields(scroll, content_width, blocked);
+                }
+            });
+            if (!fields.opened) {
+                State.custom_task_scroll = fields.scroll_offset;
+            }
+        }
     });
     if (dialog.dismissed) {
         CloseCustomTask();
         return;
     }
-    if (!dialog.opened) {
-        return;
-    }
-    let current: ListsUiRow = {};
-    let blocked = State.frame.sharing_busy || State.frame.sharing_pending;
-    if (State.state.selected_list >= 0n && State.state.selected_list < State.state.list_count) {
-        current = ReadListsRowHost(State.state.selected_list, false);
-        blocked = blocked || current.read_only || current.incomplete;
-    } else {
-        blocked = true;
-    }
-    let x = s32(dialog.layout.content.x);
-    let y = s32(dialog.layout.content.y);
-    let content_width = s32(dialog.layout.content.width);
-    let fields = Scroll({
-        session: State.frame.session,
-        props: {
-            key: 6555n,
-            bounds: Bounds(x, y, content_width, s32(dialog.layout.content.height)),
-            content_height: Scale(350n),
-            scroll_offset: State.custom_task_scroll,
-            scale: State.frame.scale
-        },
-        children: (scroll: NativeScroll.ScrollResult): void => {
-            CustomTaskFields(scroll, content_width, blocked);
-        }
-    });
-    if (!fields.opened) {
-        State.custom_task_scroll = fields.scroll_offset;
-    }
-    End(State.frame.session);
 }
 
 function CustomTaskFields(
@@ -926,6 +927,7 @@ function InvitationRow(
 // The list chips wrap, with a new-list chip at the end. The viewport shows up to three rows.
 function ListChips(x: s32, y: s32, width: s32, blocked: boolean): ListChipsResult {
     let result: ListChipsResult = {};
+    const result_ref = nativeRef(result);
     let chip_height = Scale(40n);
     let gap = Scale(8n);
     let padding = Scale(18n);
@@ -961,78 +963,86 @@ function ListChips(x: s32, y: s32, width: s32, blocked: boolean): ListChipsResul
     let rows = row + 1n;
     let shown_rows = rows > 3n ? 3n : rows;
     result.height = shown_rows * chip_height + (shown_rows - 1n) * gap;
-    let scroll = NativeScroll.Draw(State.frame.session, {
-        key: u64(6500n),
-        bounds: Bounds(x, y, width, result.height),
-        content_height: rows * chip_height + (rows - 1n) * gap,
-        scroll_offset: State.frame.tab_scroll
+    let scroll = Scroll({
+        session: State.frame.session,
+        props: {
+            key: u64(6500n),
+            bounds: Bounds(x, y, width, result.height),
+            content_height: rows * chip_height + (rows - 1n) * gap,
+            scroll_offset: State.frame.tab_scroll
+        },
+        children: (scroll: NativeScroll.ScrollResult): void => {
+            State.frame.tab_scroll = scroll.scroll_offset;
+
+            for (let index: s32 = s32(0n); index <= State.state.list_count; index += 1n) {
+                let bounds = Bounds(
+                    x + nativeAt(chip_x, index),
+                    s32(scroll.content.y) + nativeAt(chip_row, index) * (chip_height + gap),
+                    nativeAt(chip_width, index),
+                    chip_height
+                );
+                if (index === State.state.list_count) {
+                    if (
+                        Button({
+                            session: State.frame.session,
+                            props: {
+                                key: u64(6505n),
+                                bounds: bounds,
+                                label: ListsLocaleHost("elist_new_list"),
+                                icon_type: s32(IconType.IconPlus),
+                                icon_only: true,
+                                pill: true,
+                                emphasis: ButtonEmphasis.ButtonEmphasisOutline,
+                                disabled: blocked || State.state.list_count >= 32n
+                            }
+                        })
+                    ) {
+                        BeginInput(-2n, "");
+                        State.frame.panel = 0n;
+                        nativeDeref(result_ref).acted = true;
+                    }
+                    continue;
+                }
+                let chosen = index === State.state.selected_list;
+                let title = ReadListsRowHost(index, false).title;
+                if (
+                    Button({
+                        session: State.frame.session,
+                        props: {
+                            key: u64(6800n + index),
+                            bounds: bounds,
+                            label: title,
+                            pill: true,
+                            selected: chosen,
+                            icon_shape: chosen ? NativeSettingsIcon.Shape : "",
+                            icon_placement: IconPlacement.IconPlacementTrailing,
+                            tone: chosen
+                                ? ButtonTone.ButtonToneAccent
+                                : ButtonTone.ButtonToneNeutral,
+                            emphasis: chosen
+                                ? ButtonEmphasis.ButtonEmphasisFilled
+                                : ButtonEmphasis.ButtonEmphasisOutline
+                        }
+                    })
+                ) {
+                    if (chosen) {
+                        OpenSettings(Copied(title));
+                    } else {
+                        State.state.action = LISTS_SELECT;
+                        State.state.index = index;
+                        State.undo_until = 0.0;
+                        State.delete_confirm = false;
+                        State.frame.panel = 0n;
+                    }
+                    nativeDeref(result_ref).acted = true;
+                }
+            }
+        }
     });
-    State.frame.tab_scroll = scroll.scroll_offset;
     if (!scroll.opened) {
+        State.frame.tab_scroll = scroll.scroll_offset;
         return result;
     }
-    for (let index: s32 = s32(0n); index <= State.state.list_count; index += 1n) {
-        let bounds = Bounds(
-            x + nativeAt(chip_x, index),
-            s32(scroll.content.y) + nativeAt(chip_row, index) * (chip_height + gap),
-            nativeAt(chip_width, index),
-            chip_height
-        );
-        if (index === State.state.list_count) {
-            if (
-                Button({
-                    session: State.frame.session,
-                    props: {
-                        key: u64(6505n),
-                        bounds: bounds,
-                        label: ListsLocaleHost("elist_new_list"),
-                        icon_type: s32(IconType.IconPlus),
-                        icon_only: true,
-                        pill: true,
-                        emphasis: ButtonEmphasis.ButtonEmphasisOutline,
-                        disabled: blocked || State.state.list_count >= 32n
-                    }
-                })
-            ) {
-                BeginInput(-2n, "");
-                State.frame.panel = 0n;
-                result.acted = true;
-            }
-            continue;
-        }
-        let chosen = index === State.state.selected_list;
-        let title = ReadListsRowHost(index, false).title;
-        if (
-            Button({
-                session: State.frame.session,
-                props: {
-                    key: u64(6800n + index),
-                    bounds: bounds,
-                    label: title,
-                    pill: true,
-                    selected: chosen,
-                    icon_shape: chosen ? NativeSettingsIcon.Shape : "",
-                    icon_placement: IconPlacement.IconPlacementTrailing,
-                    tone: chosen ? ButtonTone.ButtonToneAccent : ButtonTone.ButtonToneNeutral,
-                    emphasis: chosen
-                        ? ButtonEmphasis.ButtonEmphasisFilled
-                        : ButtonEmphasis.ButtonEmphasisOutline
-                }
-            })
-        ) {
-            if (chosen) {
-                OpenSettings(Copied(title));
-            } else {
-                State.state.action = LISTS_SELECT;
-                State.state.index = index;
-                State.undo_until = 0.0;
-                State.delete_confirm = false;
-                State.frame.panel = 0n;
-            }
-            result.acted = true;
-        }
-    }
-    End(State.frame.session);
     return result;
 }
 
@@ -1109,199 +1119,231 @@ export function ListSettingsPage(): void {
     if (owns) {
         content += State.delete_confirm ? Scale(170n) : Scale(52n);
     }
-    let scroll = NativeScroll.Draw(State.frame.session, {
-        key: u64(6560n),
-        bounds: Bounds(x, y, width, State.frame.height - State.frame.bottom - y - Scale(12n)),
-        content_height: content,
-        scroll_offset: State.settings_scroll
+    let scroll_action = false;
+    const scroll_action_ref = nativeRef(scroll_action);
+    let suggestions_y = s32(0);
+    const suggestions_y_ref = nativeRef(suggestions_y);
+    let scroll = Scroll({
+        session: State.frame.session,
+        props: {
+            key: u64(6560n),
+            bounds: Bounds(x, y, width, State.frame.height - State.frame.bottom - y - Scale(12n)),
+            content_height: content,
+            scroll_offset: State.settings_scroll
+        },
+        children: (scroll: NativeScroll.ScrollResult): void => {
+            State.settings_scroll = scroll.scroll_offset;
+            State.sharing_viewport = scroll.viewport;
+
+            let cy = s32(scroll.content.y);
+            <Text
+                session={State.frame.session}
+                props={{
+                    bounds: Bounds(x, cy, inner, Scale(24n)),
+                    text: ListsLocaleHost("elist_list_name_placeholder"),
+                    disabled: true
+                }}
+            />;
+            cy += Scale(28n);
+            if (State.invite_focused) {
+                State.frame.focused = false;
+            }
+            let committed = Field(
+                Bounds(x, cy, inner - Scale(96n), Scale(44n)),
+                ListsLocaleHost("elist_list_name_placeholder"),
+                read_only || blocked
+            );
+            let renamed =
+                State.frame.value.count > 0n &&
+                State.frame.value !== title &&
+                !read_only &&
+                !blocked;
+            if (
+                Button({
+                    session: State.frame.session,
+                    props: {
+                        key: u64(6551n),
+                        bounds: Bounds(x + inner - Scale(88n), cy, Scale(88n), Scale(44n)),
+                        label: ListsLocaleHost("save_button"),
+                        tone: ButtonTone.ButtonToneAccent,
+                        emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                        disabled: !renamed
+                    }
+                }) ||
+                (committed && renamed)
+            ) {
+                Mutation(LISTS_COMMIT, -1n);
+                State.frame.focused = false;
+                nativeDeref(scroll_action_ref) = true;
+                return;
+            }
+            cy += Scale(72n);
+            <Text
+                session={State.frame.session}
+                props={{
+                    bounds: Bounds(x, cy, inner, Scale(24n)),
+                    text: ListsLocaleHost("elist_people_with_access"),
+                    disabled: true
+                }}
+            />;
+            cy += Scale(32n);
+            if (!State.frame.connected) {
+                <Text
+                    session={State.frame.session}
+                    props={{
+                        bounds: Bounds(x, cy, inner, Scale(64n)),
+                        text: ListsLocaleHost("elist_connect"),
+                        wrap: NativeText.Wrap.TextWrapAuto
+                    }}
+                />;
+                cy += Scale(64n);
+            } else {
+                let owner_name = owner_alias.count > 0n ? owner_alias : owner_id;
+                if (!shared || owner_id === State.frame.public_id) {
+                    owner_name = ListsLocaleHost("elist_you");
+                }
+                MemberRow(
+                    {
+                        target: owner_id,
+                        target_alias: owner_name,
+                        access: "owner",
+                        profile_icon: FriendIcon(owner_id)
+                    },
+                    0n,
+                    x,
+                    cy,
+                    inner,
+                    false,
+                    true,
+                    blocked
+                );
+                cy += Scale(MEMBER_ROW);
+                let place: s32 = s32(1n);
+                for (let index: s32 = s32(0n); index < State.frame.invitation_count; index += 1n) {
+                    let person = ReadListsSharingRowHost(index, true);
+                    if (!SharingMemberShown(person, list_id)) {
+                        continue;
+                    }
+                    MemberRow(person, place, x, cy, inner, owns, false, blocked);
+                    place += 1n;
+                    cy += Scale(MEMBER_ROW);
+                }
+            }
+            cy += Scale(20n);
+            nativeDeref(suggestions_y_ref) = cy + Scale(48n);
+            if (can_invite) {
+                if (InviteField(x, cy, inner, blocked || incomplete)) {
+                    nativeDeref(scroll_action_ref) = true;
+                    return;
+                }
+                cy += InviteFieldHeight(inner) + Scale(24n);
+            }
+            if (owns && !State.delete_confirm) {
+                if (
+                    Button({
+                        session: State.frame.session,
+                        props: {
+                            key: u64(6515n),
+                            bounds: Bounds(x, cy, inner, Scale(44n)),
+                            label: ListsLocaleHost("elist_delete_list"),
+                            icon_shape: TRASH_ICON,
+                            tone: ButtonTone.ButtonToneDanger,
+                            emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                            disabled: blocked
+                        }
+                    })
+                ) {
+                    State.delete_confirm = true;
+                }
+            } else if (owns) {
+                <Box
+                    session={State.frame.session}
+                    props={{
+                        key: u64(6518n),
+                        bounds: Bounds(x, cy, inner, Scale(160n)),
+                        border: { r: 198n, g: 52n, b: 52n, a: 160n },
+                        radius: float32(Scale(12n))
+                    }}
+                />;
+                <Text
+                    session={State.frame.session}
+                    props={{
+                        bounds: Bounds(
+                            x + Scale(16n),
+                            cy + Scale(12n),
+                            inner - Scale(32n),
+                            Scale(30n)
+                        ),
+                        text: ListsLocaleHost("elist_delete_question"),
+                        size: Scale(18n)
+                    }}
+                />;
+                <Text
+                    session={State.frame.session}
+                    props={{
+                        bounds: Bounds(
+                            x + Scale(16n),
+                            cy + Scale(44n),
+                            inner - Scale(32n),
+                            Scale(48n)
+                        ),
+                        text: ListsLocaleHost("elist_delete_detail"),
+                        wrap: NativeText.Wrap.TextWrapAuto,
+                        disabled: true
+                    }}
+                />;
+                let button_width = (inner - Scale(44n)) / 2n;
+                if (
+                    Button({
+                        session: State.frame.session,
+                        props: {
+                            key: u64(6514n),
+                            bounds: Bounds(
+                                x + Scale(16n),
+                                cy + Scale(100n),
+                                button_width,
+                                Scale(44n)
+                            ),
+                            label: ListsLocaleHost("cancel_button")
+                        }
+                    })
+                ) {
+                    State.delete_confirm = false;
+                }
+                if (
+                    Button({
+                        session: State.frame.session,
+                        props: {
+                            key: u64(6516n),
+                            bounds: Bounds(
+                                x + Scale(28n) + button_width,
+                                cy + Scale(100n),
+                                button_width,
+                                Scale(44n)
+                            ),
+                            label: ListsLocaleHost("elist_delete_list"),
+                            tone: ButtonTone.ButtonToneDanger,
+                            emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                            disabled: blocked
+                        }
+                    })
+                ) {
+                    CloseSettings();
+                    Mutation(LISTS_DELETE_LIST, -1n);
+                    nativeDeref(scroll_action_ref) = true;
+                    return;
+                }
+            }
+        }
     });
-    State.settings_scroll = scroll.scroll_offset;
-    State.sharing_viewport = scroll.viewport;
     if (!scroll.opened) {
+        State.settings_scroll = scroll.scroll_offset;
+        State.sharing_viewport = scroll.viewport;
         return;
     }
-    let cy = s32(scroll.content.y);
-    <Text
-        session={State.frame.session}
-        props={{
-            bounds: Bounds(x, cy, inner, Scale(24n)),
-            text: ListsLocaleHost("elist_list_name_placeholder"),
-            disabled: true
-        }}
-    />;
-    cy += Scale(28n);
-    if (State.invite_focused) {
-        State.frame.focused = false;
-    }
-    let committed = Field(
-        Bounds(x, cy, inner - Scale(96n), Scale(44n)),
-        ListsLocaleHost("elist_list_name_placeholder"),
-        read_only || blocked
-    );
-    let renamed =
-        State.frame.value.count > 0n && State.frame.value !== title && !read_only && !blocked;
-    if (
-        Button({
-            session: State.frame.session,
-            props: {
-                key: u64(6551n),
-                bounds: Bounds(x + inner - Scale(88n), cy, Scale(88n), Scale(44n)),
-                label: ListsLocaleHost("save_button"),
-                tone: ButtonTone.ButtonToneAccent,
-                emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                disabled: !renamed
-            }
-        }) ||
-        (committed && renamed)
-    ) {
-        Mutation(LISTS_COMMIT, -1n);
-        State.frame.focused = false;
-        End(State.frame.session);
+    if (scroll_action) {
         return;
     }
-    cy += Scale(72n);
-    <Text
-        session={State.frame.session}
-        props={{
-            bounds: Bounds(x, cy, inner, Scale(24n)),
-            text: ListsLocaleHost("elist_people_with_access"),
-            disabled: true
-        }}
-    />;
-    cy += Scale(32n);
-    if (!State.frame.connected) {
-        <Text
-            session={State.frame.session}
-            props={{
-                bounds: Bounds(x, cy, inner, Scale(64n)),
-                text: ListsLocaleHost("elist_connect"),
-                wrap: NativeText.Wrap.TextWrapAuto
-            }}
-        />;
-        cy += Scale(64n);
-    } else {
-        let owner_name = owner_alias.count > 0n ? owner_alias : owner_id;
-        if (!shared || owner_id === State.frame.public_id) {
-            owner_name = ListsLocaleHost("elist_you");
-        }
-        MemberRow(
-            {
-                target: owner_id,
-                target_alias: owner_name,
-                access: "owner",
-                profile_icon: FriendIcon(owner_id)
-            },
-            0n,
-            x,
-            cy,
-            inner,
-            false,
-            true,
-            blocked
-        );
-        cy += Scale(MEMBER_ROW);
-        let place: s32 = s32(1n);
-        for (let index: s32 = s32(0n); index < State.frame.invitation_count; index += 1n) {
-            let person = ReadListsSharingRowHost(index, true);
-            if (!SharingMemberShown(person, list_id)) {
-                continue;
-            }
-            MemberRow(person, place, x, cy, inner, owns, false, blocked);
-            place += 1n;
-            cy += Scale(MEMBER_ROW);
-        }
-    }
-    cy += Scale(20n);
-    let suggestions_y = cy + Scale(48n);
-    if (can_invite) {
-        if (InviteField(x, cy, inner, blocked || incomplete)) {
-            End(State.frame.session);
-            return;
-        }
-        cy += InviteFieldHeight(inner) + Scale(24n);
-    }
-    if (owns && !State.delete_confirm) {
-        if (
-            Button({
-                session: State.frame.session,
-                props: {
-                    key: u64(6515n),
-                    bounds: Bounds(x, cy, inner, Scale(44n)),
-                    label: ListsLocaleHost("elist_delete_list"),
-                    icon_shape: TRASH_ICON,
-                    tone: ButtonTone.ButtonToneDanger,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                    disabled: blocked
-                }
-            })
-        ) {
-            State.delete_confirm = true;
-        }
-    } else if (owns) {
-        <Box
-            session={State.frame.session}
-            props={{
-                key: u64(6518n),
-                bounds: Bounds(x, cy, inner, Scale(160n)),
-                border: { r: 198n, g: 52n, b: 52n, a: 160n },
-                radius: float32(Scale(12n))
-            }}
-        />;
-        <Text
-            session={State.frame.session}
-            props={{
-                bounds: Bounds(x + Scale(16n), cy + Scale(12n), inner - Scale(32n), Scale(30n)),
-                text: ListsLocaleHost("elist_delete_question"),
-                size: Scale(18n)
-            }}
-        />;
-        <Text
-            session={State.frame.session}
-            props={{
-                bounds: Bounds(x + Scale(16n), cy + Scale(44n), inner - Scale(32n), Scale(48n)),
-                text: ListsLocaleHost("elist_delete_detail"),
-                wrap: NativeText.Wrap.TextWrapAuto,
-                disabled: true
-            }}
-        />;
-        let button_width = (inner - Scale(44n)) / 2n;
-        if (
-            Button({
-                session: State.frame.session,
-                props: {
-                    key: u64(6514n),
-                    bounds: Bounds(x + Scale(16n), cy + Scale(100n), button_width, Scale(44n)),
-                    label: ListsLocaleHost("cancel_button")
-                }
-            })
-        ) {
-            State.delete_confirm = false;
-        }
-        if (
-            Button({
-                session: State.frame.session,
-                props: {
-                    key: u64(6516n),
-                    bounds: Bounds(
-                        x + Scale(28n) + button_width,
-                        cy + Scale(100n),
-                        button_width,
-                        Scale(44n)
-                    ),
-                    label: ListsLocaleHost("elist_delete_list"),
-                    tone: ButtonTone.ButtonToneDanger,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                    disabled: blocked
-                }
-            })
-        ) {
-            CloseSettings();
-            Mutation(LISTS_DELETE_LIST, -1n);
-            End(State.frame.session);
-            return;
-        }
-    }
-    End(State.frame.session);
     if (SharingAccessControls()) {
         return;
     }
@@ -1713,170 +1755,186 @@ export function ListsPage(): void {
         />;
     }
     let shown_finished = State.state.show_completed !== 0n ? finished_count : 0n;
-    let scroll = NativeScroll.Draw(State.frame.session, {
-        key: u64(6600n),
-        bounds: Bounds(x, y + pull_offset, width, list_height - pull_offset),
-        content_height: (shown_finished + open_count) * Scale(72n),
-        scroll_offset: State.frame.scroll
-    });
-    State.frame.scroll = scroll.scroll_offset;
-    if (scroll.opened) {
-        let row_y = s32(scroll.content.y);
-        let row_right = x + width - Scale(14n);
-        for (
-            let position: s32 = s32(0n);
-            position < shown_finished + open_count;
-            position += s32(1)
-        ) {
-            let index =
-                position < shown_finished
-                    ? nativeAt(finished_order, position)
-                    : nativeAt(open_order, position - shown_finished);
-            let visible_row =
-                row_y + Scale(64n) > s32(scroll.viewport.y) &&
-                row_y < s32(scroll.viewport.y + scroll.viewport.height);
-            if (visible_row && index === State.state.editing_item && State.frame.panel !== 3n) {
-                let check_x = row_right - Scale(44n);
-                let committed = Field(
-                    Bounds(x, row_y + Scale(10n), check_x - Scale(8n) - x, Scale(44n)),
-                    ListsLocaleHost("elist_item_name_placeholder"),
-                    blocked
-                );
-                if (State.field_escaped) {
-                    State.state.editing_item = -1n;
-                    State.state.reset_input = true;
-                    State.frame.focused = false;
-                    End(State.frame.session);
-                    return;
-                }
-                if (
-                    Button({
-                        session: State.frame.session,
-                        props: {
-                            key: u64(6511n),
-                            bounds: Bounds(check_x, row_y + Scale(10n), Scale(44n), Scale(44n)),
-                            label: ListsLocaleHost("save_button"),
-                            icon_type: s32(IconType.IconCheck),
-                            icon_only: true,
-                            tone: ButtonTone.ButtonToneAccent,
-                            emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                            disabled: State.frame.value.count === 0n || blocked
-                        }
-                    }) ||
-                    (committed && !blocked)
-                ) {
-                    Mutation(LISTS_COMMIT, -1n);
-                    End(State.frame.session);
-                    return;
-                }
-            } else if (visible_row) {
-                let row = ReadListsRowHost(index, true);
-                let swiped = SwipeRow({
-                    widget: {
-                        session: State.frame.session,
-                        props: {
-                            key: u64(7000n + index * 4n),
-                            bounds: Bounds(x, row_y, row_right - x, Scale(64n)),
-                            label: row.title,
-                            now: State.state.now,
-                            scale: State.frame.scale,
-                            start: CompleteSwipe(),
-                            end: DeleteSwipe(),
-                            threshold: 0.5,
-                            end_threshold: 0.35,
-                            long_threshold: 1.0,
-                            start_width: float32(Scale(176n)),
-                            long_start: EditSwipe(),
-                            disabled: blocked
-                        }
-                    },
-                    state: State.row_swipe
-                });
-                State.row_swipe = swiped.state;
-                if (
-                    Button({
-                        session: State.frame.session,
-                        props: {
-                            key: u64(8200n + index),
-                            bounds: Bounds(
-                                row_right - Scale(44n),
-                                row_y + Scale(10n),
-                                Scale(44n),
-                                Scale(44n)
-                            ),
-                            label: ListsLocaleHost("elist_edit_task"),
-                            icon_type: s32(IconType.IconEdit),
-                            icon_only: true,
-                            tone: ButtonTone.ButtonToneNeutral,
-                            emphasis: ButtonEmphasis.ButtonEmphasisGhost,
-                            disabled: blocked
-                        }
-                    })
-                ) {
-                    BeginCustomTask(index, row.title, row.comment);
-                    End(State.frame.session);
-                    return;
-                }
-                let text_x = x + Scale(12n) + s32(swiped.offset);
-                let text_width = row_right - x - Scale(68n);
-                <Text
-                    session={State.frame.session}
-                    props={{
-                        bounds: Bounds(
-                            text_x,
-                            row_y,
-                            text_width,
-                            row.comment.count > 0n ? Scale(30n) : Scale(64n)
-                        ),
-                        text: row.title,
-                        vertical_align: TextAlign.TextAlignCenter,
-                        strikethrough: row.done !== 0n
-                    }}
-                />;
-                if (row.comment.count > 0n) {
+    let row_action = false;
+    const row_action_ref = nativeRef(row_action);
+    let scroll = Scroll({
+        session: State.frame.session,
+        props: {
+            key: u64(6600n),
+            bounds: Bounds(x, y + pull_offset, width, list_height - pull_offset),
+            content_height: (shown_finished + open_count) * Scale(72n),
+            scroll_offset: State.frame.scroll
+        },
+        children: (scroll: NativeScroll.ScrollResult): void => {
+            State.frame.scroll = scroll.scroll_offset;
+            let row_y = s32(scroll.content.y);
+            let row_right = x + width - Scale(14n);
+            for (
+                let position: s32 = s32(0n);
+                position < shown_finished + open_count;
+                position += s32(1)
+            ) {
+                let index =
+                    position < shown_finished
+                        ? nativeAt(finished_order, position)
+                        : nativeAt(open_order, position - shown_finished);
+                let visible_row =
+                    row_y + Scale(64n) > s32(scroll.viewport.y) &&
+                    row_y < s32(scroll.viewport.y + scroll.viewport.height);
+                if (visible_row && index === State.state.editing_item && State.frame.panel !== 3n) {
+                    let check_x = row_right - Scale(44n);
+                    let committed = Field(
+                        Bounds(x, row_y + Scale(10n), check_x - Scale(8n) - x, Scale(44n)),
+                        ListsLocaleHost("elist_item_name_placeholder"),
+                        blocked
+                    );
+                    if (State.field_escaped) {
+                        State.state.editing_item = -1n;
+                        State.state.reset_input = true;
+                        State.frame.focused = false;
+
+                        nativeDeref(row_action_ref) = true;
+                        return;
+                    }
+                    if (
+                        Button({
+                            session: State.frame.session,
+                            props: {
+                                key: u64(6511n),
+                                bounds: Bounds(check_x, row_y + Scale(10n), Scale(44n), Scale(44n)),
+                                label: ListsLocaleHost("save_button"),
+                                icon_type: s32(IconType.IconCheck),
+                                icon_only: true,
+                                tone: ButtonTone.ButtonToneAccent,
+                                emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                                disabled: State.frame.value.count === 0n || blocked
+                            }
+                        }) ||
+                        (committed && !blocked)
+                    ) {
+                        Mutation(LISTS_COMMIT, -1n);
+
+                        nativeDeref(row_action_ref) = true;
+                        return;
+                    }
+                } else if (visible_row) {
+                    let row = ReadListsRowHost(index, true);
+                    let swiped = SwipeRow({
+                        widget: {
+                            session: State.frame.session,
+                            props: {
+                                key: u64(7000n + index * 4n),
+                                bounds: Bounds(x, row_y, row_right - x, Scale(64n)),
+                                label: row.title,
+                                now: State.state.now,
+                                scale: State.frame.scale,
+                                start: CompleteSwipe(),
+                                end: DeleteSwipe(),
+                                threshold: 0.5,
+                                end_threshold: 0.35,
+                                long_threshold: 1.0,
+                                start_width: float32(Scale(176n)),
+                                long_start: EditSwipe(),
+                                disabled: blocked
+                            }
+                        },
+                        state: State.row_swipe
+                    });
+                    State.row_swipe = swiped.state;
+                    if (
+                        Button({
+                            session: State.frame.session,
+                            props: {
+                                key: u64(8200n + index),
+                                bounds: Bounds(
+                                    row_right - Scale(44n),
+                                    row_y + Scale(10n),
+                                    Scale(44n),
+                                    Scale(44n)
+                                ),
+                                label: ListsLocaleHost("elist_edit_task"),
+                                icon_type: s32(IconType.IconEdit),
+                                icon_only: true,
+                                tone: ButtonTone.ButtonToneNeutral,
+                                emphasis: ButtonEmphasis.ButtonEmphasisGhost,
+                                disabled: blocked
+                            }
+                        })
+                    ) {
+                        BeginCustomTask(index, row.title, row.comment);
+
+                        nativeDeref(row_action_ref) = true;
+                        return;
+                    }
+                    let text_x = x + Scale(12n) + s32(swiped.offset);
+                    let text_width = row_right - x - Scale(68n);
                     <Text
                         session={State.frame.session}
                         props={{
-                            bounds: Bounds(text_x, row_y + Scale(34n), text_width, Scale(24n)),
-                            text: row.comment
+                            bounds: Bounds(
+                                text_x,
+                                row_y,
+                                text_width,
+                                row.comment.count > 0n ? Scale(30n) : Scale(64n)
+                            ),
+                            text: row.title,
+                            vertical_align: TextAlign.TextAlignCenter,
+                            strikethrough: row.done !== 0n
                         }}
                     />;
-                }
-                if (swiped.swiped_start) {
-                    State.state.done = row.done !== 0n ? 0n : 1n;
-                    Mutation(LISTS_SET_DONE, index);
-                    End(State.frame.session);
-                    return;
-                }
-                if (swiped.clicked) {
-                    State.state.done = row.done !== 0n ? 0n : 1n;
-                    Mutation(LISTS_SET_DONE, index);
-                    End(State.frame.session);
-                    return;
-                }
-                if (swiped.right_clicked) {
-                    State.row_menu_open = true;
-                    State.row_menu_index = index;
-                    State.row_menu_x = swiped.pointer_x;
-                    State.row_menu_y = swiped.pointer_y;
-                }
-                if (swiped.swiped_long_start) {
-                    BeginCustomTask(index, row.title, row.comment);
-                }
-                if (swiped.swiped_end) {
-                    RememberDeleted(row);
-                    Mutation(LISTS_DELETE_ITEM, index);
-                    if (State.state.editing_item >= 0n) {
-                        State.state.editing_item = -1n;
-                        State.state.reset_input = true;
+                    if (row.comment.count > 0n) {
+                        <Text
+                            session={State.frame.session}
+                            props={{
+                                bounds: Bounds(text_x, row_y + Scale(34n), text_width, Scale(24n)),
+                                text: row.comment
+                            }}
+                        />;
                     }
-                    End(State.frame.session);
-                    return;
+                    if (swiped.swiped_start) {
+                        State.state.done = row.done !== 0n ? 0n : 1n;
+                        Mutation(LISTS_SET_DONE, index);
+
+                        nativeDeref(row_action_ref) = true;
+                        return;
+                    }
+                    if (swiped.clicked) {
+                        State.state.done = row.done !== 0n ? 0n : 1n;
+                        Mutation(LISTS_SET_DONE, index);
+
+                        nativeDeref(row_action_ref) = true;
+                        return;
+                    }
+                    if (swiped.right_clicked) {
+                        State.row_menu_open = true;
+                        State.row_menu_index = index;
+                        State.row_menu_x = swiped.pointer_x;
+                        State.row_menu_y = swiped.pointer_y;
+                    }
+                    if (swiped.swiped_long_start) {
+                        BeginCustomTask(index, row.title, row.comment);
+                    }
+                    if (swiped.swiped_end) {
+                        RememberDeleted(row);
+                        Mutation(LISTS_DELETE_ITEM, index);
+                        if (State.state.editing_item >= 0n) {
+                            State.state.editing_item = -1n;
+                            State.state.reset_input = true;
+                        }
+
+                        nativeDeref(row_action_ref) = true;
+                        return;
+                    }
                 }
+                row_y += Scale(72n);
             }
-            row_y += Scale(72n);
         }
-        End(State.frame.session);
+    });
+    if (!scroll.opened) {
+        State.frame.scroll = scroll.scroll_offset;
+    }
+    if (row_action) {
+        return;
     }
     RowContextMenu(blocked);
 }

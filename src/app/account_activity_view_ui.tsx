@@ -41,7 +41,6 @@ export function ActivityDrawRemote(app: NativeRef<InnerBreeze>, hosted: boolean 
     let left = AppScale(24n);
     let width = app.ui.view_width - left * 2n;
     let top = app_content_top_reserved(app) + AppScale(24n);
-    let name = practice_label(session_window_practice(value.screen));
     <Text
         session={session}
         props={{
@@ -52,7 +51,7 @@ export function ActivityDrawRemote(app: NativeRef<InnerBreeze>, hosted: boolean 
                 width: float32(width),
                 height: float32(AppScale(56n))
             },
-            text: name,
+            text: practice_label(session_window_practice(value.screen)),
             size: AppScale(28n)
         }}
     />;
@@ -93,31 +92,37 @@ export function ActivityDrawRemote(app: NativeRef<InnerBreeze>, hosted: boolean 
             size: AppScale(32n)
         }}
     />;
-    let phase: string = "";
-    if (value.screen === ScreenPatterns) {
-        phase = LocaleText(patterns_phase_label_key(value.phase));
-    } else if (value.screen === ScreenSunSalutation) {
-        phase = SunSalutationPoseName(value.phase);
-    } else if (value.screen === ScreenSession) {
-        let round = NewRound();
-        FormatNumberTemplate(LocaleText("session_round_label"), value.round, nativeSlice(round));
-        phase = FrameTextHold(nativeRef(app.ui.frame_text), TextUntilNul(nativeSlice(round)));
-    }
-    if (phase.count > 0n) {
-        <Text
-            session={session}
-            props={{
-                key: NativeLayout.KeyHash("inbe/activity/phase"),
-                bounds: {
-                    x: float32(left),
-                    y: float32(top + AppScale(232n)),
-                    width: float32(width),
-                    height: float32(AppScale(60n))
-                },
-                text: phase,
-                size: AppFontSize()
-            }}
-        />;
+    {
+        let phase: string = "";
+        if (value.screen === ScreenPatterns) {
+            phase = LocaleText(patterns_phase_label_key(value.phase));
+        } else if (value.screen === ScreenSunSalutation) {
+            phase = SunSalutationPoseName(value.phase);
+        } else if (value.screen === ScreenSession) {
+            let round = NewRound();
+            FormatNumberTemplate(
+                LocaleText("session_round_label"),
+                value.round,
+                nativeSlice(round)
+            );
+            phase = FrameTextHold(nativeRef(app.ui.frame_text), TextUntilNul(nativeSlice(round)));
+        }
+        if (phase.count > 0n) {
+            <Text
+                session={session}
+                props={{
+                    key: NativeLayout.KeyHash("inbe/activity/phase"),
+                    bounds: {
+                        x: float32(left),
+                        y: float32(top + AppScale(232n)),
+                        width: float32(width),
+                        height: float32(AppScale(60n))
+                    },
+                    text: phase,
+                    size: AppFontSize()
+                }}
+            />;
+        }
     }
     let pending = nativeAt(ActivityState.account_activity.pending_control, 0n) !== u8(0n);
     let label = "pause_button";

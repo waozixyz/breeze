@@ -1,3 +1,4 @@
+import { ResolvedModal } from "kryon/tsx/modal";
 import * as Shared from "habit_shared";
 // A habit's day and the dialog that writes its entries. The day's screen
 // lists the day's entries, each with buttons that change or delete it and,
@@ -11,7 +12,7 @@ import * as Shared from "habit_shared";
 import * as Model from "habit_day_view";
 import * as Habit from "habit_types";
 import * as Habits from "habits_types";
-import { HabitsAnswer, HabitsDayEntry } from "habits_ui_types";
+import { HabitsAnswer, HabitsDayEntry, HabitsDayFrame, HabitsEntryFrame } from "habits_ui_types";
 import * as NativeButton from "kryon/button";
 import { ButtonEmphasis, ButtonTone } from "kryon/control_props";
 import { DarkenColor } from "kryon/drawing_props";
@@ -23,7 +24,6 @@ import * as NativeScroll from "kryon/scroll";
 import { SemanticKind } from "kryon/semantic";
 import * as NativeText from "kryon/text";
 import { TextAlign } from "kryon/text_align";
-import { End } from "kryon/tree";
 import { Box } from "kryon/tsx/box";
 import { Button } from "kryon/tsx/button";
 import { Shape } from "kryon/tsx/shape";
@@ -54,7 +54,7 @@ function EntryActionProps(
 }
 
 function Card(bounds: Rectangle): void {
-    const day_state = Model.CurrentDay();
+    const day_state: NativeRef<HabitsDayFrame> = Model.CurrentDay();
     <Box
         session={Model.CurrentSession()}
         props={{
@@ -112,7 +112,7 @@ function EntryAnswers(summary: string, x: s32, y: s32, width: s32, draw: boolean
 // no time, so their answers sit beside the buttons, and a skipped one shows
 // when it was recorded.
 function EntryCardHeight(item: HabitsDayEntry, width: s32): s32 {
-    const day_state = Model.CurrentDay();
+    const day_state: NativeRef<HabitsDayFrame> = Model.CurrentDay();
     let pad = Model.Scale(Model.DAY_CARD_PADDING);
     let buttons = Model.Scale(Model.DAY_ENTRY_BUTTON);
     if (!day_state.span && item.summary.count > 0n) {
@@ -141,7 +141,7 @@ function EntryCardHeight(item: HabitsDayEntry, width: s32): s32 {
 // The day's entries: a card for each entry, then a button that adds one.
 // Returns the y below them.
 function DayEntries(x: s32, width: s32, y: s32, draw: boolean): s32 {
-    const day_state = Model.CurrentDay();
+    const day_state: NativeRef<HabitsDayFrame> = Model.CurrentDay();
     let icon_width = Model.Scale(Model.DAY_ENTRY_BUTTON);
     let pad = Model.Scale(Model.DAY_CARD_PADDING);
     let heading_height = Model.Scale(34n);
@@ -291,7 +291,7 @@ function DayEntries(x: s32, width: s32, y: s32, draw: boolean): s32 {
 
 // A line between the rows of a practice's card.
 function Divider(x: s32, y: s32, width: s32): void {
-    const day_state = Model.CurrentDay();
+    const day_state: NativeRef<HabitsDayFrame> = Model.CurrentDay();
     <Box
         session={Model.CurrentSession()}
         props={{
@@ -303,7 +303,7 @@ function Divider(x: s32, y: s32, width: s32): void {
 
 // Each breathing session shows its actual round values on a labelled plot.
 function SessionRoundGraph(session_index: s32, rounds: s32, x: s32, y: s32, width: s32): void {
-    const day_state = Model.CurrentDay();
+    const day_state: NativeRef<HabitsDayFrame> = Model.CurrentDay();
     let left = x + Model.Scale(62n);
     let right = x + width - Model.Scale(12n);
     let top = y + Model.Scale(12n);
@@ -416,7 +416,7 @@ function PracticeCard(
     y: s32,
     draw: boolean
 ): s32 {
-    const day_state = Model.CurrentDay();
+    const day_state: NativeRef<HabitsDayFrame> = Model.CurrentDay();
     let pad = Model.Scale(Model.DAY_CARD_PADDING);
     let x = content_x + pad;
     let width = content_width - pad * 2n;
@@ -653,7 +653,7 @@ function PracticeCard(
 // The day's entries, its sessions by practice and a counting habit's count.
 // Returns the y below them.
 function DayContent(content_x: s32, content_width: s32, y: s32, draw: boolean): s32 {
-    const day_state = Model.CurrentDay();
+    const day_state: NativeRef<HabitsDayFrame> = Model.CurrentDay();
     let section_gap = Model.Scale(16n);
     if (day_state.keeps_entries) {
         y = DayEntries(content_x, content_width, y, draw);
@@ -768,7 +768,7 @@ function DayContent(content_x: s32, content_width: s32, y: s32, draw: boolean): 
 // The number pad under the page while a round is changed: the round and its
 // seconds, the digits and Delete, then Cancel and Save.
 function NumberPad(): void {
-    const day_state = Model.CurrentDay();
+    const day_state: NativeRef<HabitsDayFrame> = Model.CurrentDay();
     let height = Model.KeyboardHeight();
     if (height <= 0n) {
         return;
@@ -895,7 +895,7 @@ function NumberPad(): void {
 // The day's screen: its title bar with Close, then its content scrolling
 // in a centred column, and the number pad while a round is changed.
 function DayScreen(): void {
-    const day_state = Model.CurrentDay();
+    const day_state: NativeRef<HabitsDayFrame> = Model.CurrentDay();
     let top_height = Model.Scale(58n);
     let max_width = Model.Scale(400n);
     let y = top_height + Model.Scale(14n);
@@ -962,8 +962,8 @@ function DayScreen(): void {
             scroll_offset: day_state.scroll
         },
         children: (scroll: NativeScroll.ScrollResult): void => {
-            const day_state = Model.CurrentDay();
-            day_state.scroll = scroll.scroll_offset;
+            const day_state: NativeRef<HabitsDayFrame> = Model.CurrentDay();
+            nativeDeref(day_state).scroll = scroll.scroll_offset;
             DayContent(content_x, content_width, s32(scroll.content.y), true);
         }
     });
@@ -977,7 +977,7 @@ function DayScreen(): void {
 }
 
 export function HabitsDayView(message: Habits.HabitsMessage): Habits.HabitsMessage {
-    const day_state = Model.CurrentDay();
+    const day_state: NativeRef<HabitsDayFrame> = Model.CurrentDay();
     Model.SetDay(Model.ReadHabitsDayHost());
     Model.SetSession(day_state.session);
     Model.look_scale = day_state.scale;
@@ -1013,7 +1013,7 @@ function TimeField(
     clearable: boolean,
     placeholder: string
 ): s32 {
-    const entry_state = Model.CurrentEntry();
+    const entry_state: NativeRef<HabitsEntryFrame> = Model.CurrentEntry();
     if (label.count > 0n) {
         <Text
             session={Model.CurrentSession()}
@@ -1064,7 +1064,7 @@ function AnswerField(
     numeric: boolean,
     max_bytes: s32
 ): boolean {
-    const entry_state = Model.CurrentEntry();
+    const entry_state: NativeRef<HabitsEntryFrame> = Model.CurrentEntry();
     let focused = entry_state.focus === index;
     let binding = Shared.BindText(
         nativeRef(entry_state.cursor),
@@ -1107,7 +1107,7 @@ function AnswerField(
 
 // A yes or no answer: tapping the chosen one again leaves it unanswered.
 function YesNo(answer: NativeRef<HabitsAnswer>, id: s32, x: s32, y: s32, width: s32): boolean {
-    const entry_state = Model.CurrentEntry();
+    const entry_state: NativeRef<HabitsEntryFrame> = Model.CurrentEntry();
     let gap = Model.Scale(8n);
     let half = (width - gap) / 2n;
     let values: [string, string] = ["yes", "no"];
@@ -1143,7 +1143,7 @@ function YesNo(answer: NativeRef<HabitsAnswer>, id: s32, x: s32, y: s32, width: 
 // The entry's span start and end, then each question above its answer in
 // the input its answer type takes.
 function AnswerFields(x: s32, y: s32, width: s32): void {
-    const entry_state = Model.CurrentEntry();
+    const entry_state: NativeRef<HabitsEntryFrame> = Model.CurrentEntry();
     if (entry_state.span) {
         let start_label = Model.Locale("habit_span_start");
         if (entry_state.start_answer >= 0n) {
@@ -1241,25 +1241,30 @@ function AnswerFields(x: s32, y: s32, width: s32): void {
 
 // The fields in a scrolling area, for entries that do not all fit.
 function AnswerArea(bounds: Rectangle): void {
-    const entry_state = Model.CurrentEntry();
-    const scroll = NativeScroll.Draw(Model.CurrentSession(), {
-        key: NativeLayout.KeyHash("habits/answers/scroll"),
-        bounds: bounds,
-        content_height: Model.AnswersHeight(),
-        scroll_offset: entry_state.scroll,
-        scale: Model.look_scale
+    const entry_state: NativeRef<HabitsEntryFrame> = Model.CurrentEntry();
+    const scroll = Scroll({
+        session: Model.CurrentSession(),
+        props: {
+            key: NativeLayout.KeyHash("habits/answers/scroll"),
+            bounds: bounds,
+            content_height: Model.AnswersHeight(),
+            scroll_offset: entry_state.scroll,
+            scale: Model.look_scale
+        },
+        children: (scroll: NativeScroll.ScrollResult): void => {
+            nativeDeref(entry_state).scroll = scroll.scroll_offset;
+            AnswerFields(s32(scroll.content.x), s32(scroll.content.y), s32(scroll.content.width));
+        }
     });
-    entry_state.scroll = scroll.scroll_offset;
-    if (scroll.opened) {
-        AnswerFields(s32(scroll.content.x), s32(scroll.content.y), s32(scroll.content.width));
-        End(Model.CurrentSession());
+    if (!scroll.opened) {
+        entry_state.scroll = scroll.scroll_offset;
     }
 }
 
 // The entry dialog. Done records a new entry and Skip records it without
 // answers; an entry that exists is saved again or deleted.
 function EntryDialog(): void {
-    const entry_state = Model.CurrentEntry();
+    const entry_state: NativeRef<HabitsEntryFrame> = Model.CurrentEntry();
     let gap = Model.Scale(12n);
     // The day sits under the name, in the frame's gap above the content.
     let date_lift = Model.Scale(16n);
@@ -1268,116 +1273,122 @@ function EntryDialog(): void {
     let date_room = date_height - date_lift + Model.Scale(10n);
     let area_height = Model.AnswerAreaHeight(date_room + gap + button_height);
     let content_height = date_room + area_height + gap + button_height;
-    let frame = NativeModal.Draw(Model.CurrentSession(), {
-        key: NativeLayout.KeyHash("habits/entry-dialog"),
-        title: entry_state.name,
-        strong_title: true,
-        title_at_start: true,
-        width: Model.Scale(380n),
-        height: content_height + Model.Scale(74n),
-        scale: Model.look_scale,
-        has_right_action: true,
-        right_label: Model.Locale("cancel_button")
+    let frame = ResolvedModal({
+        session: Model.CurrentSession(),
+        props: {
+            key: NativeLayout.KeyHash("habits/entry-dialog"),
+            title: entry_state.name,
+            strong_title: true,
+            title_at_start: true,
+            width: Model.Scale(380n),
+            height: content_height + Model.Scale(74n),
+            scale: Model.look_scale,
+            has_right_action: true,
+            right_label: Model.Locale("cancel_button")
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            let content = frame.layout.content;
+            let x = s32(content.x);
+            let y = s32(content.y);
+            let width = s32(content.width);
+            let day_text =
+                entry_state.day === entry_state.today
+                    ? Model.Locale("habits_today")
+                    : Model.DateText(entry_state.day);
+            <Text
+                session={Model.CurrentSession()}
+                props={{
+                    bounds: Shared.Bounds(x, y - date_lift, width, date_height),
+                    text: day_text,
+                    size: Model.look_small_font,
+                    class_name: Model.look_muted,
+                    wrap: NativeText.Wrap.TextWrapNone
+                }}
+            />;
+            y += date_room;
+            AnswerArea(Shared.Bounds(x, y, width, area_height));
+            y += area_height + gap;
+            if (entry_state.existing) {
+                let half = (width - gap) / 2n;
+                if (
+                    Button({
+                        session: Model.CurrentSession(),
+                        props: {
+                            id: 5730001n,
+                            bounds: Shared.Bounds(x, y, half, button_height),
+                            label: Model.Locale("delete_button"),
+                            tone: ButtonTone.ButtonToneDanger,
+                            emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                        }
+                    })
+                ) {
+                    Model.EntryAsk(Habits.HABITS_ENTRY_DELETE);
+                }
+                if (
+                    Button({
+                        session: Model.CurrentSession(),
+                        props: {
+                            id: 5730002n,
+                            bounds: Shared.Bounds(
+                                x + half + gap,
+                                y,
+                                width - half - gap,
+                                button_height
+                            ),
+                            label: Model.Locale("save_button"),
+                            tone: ButtonTone.ButtonToneAccent,
+                            emphasis: ButtonEmphasis.ButtonEmphasisFilled
+                        }
+                    })
+                ) {
+                    Model.EntryAsk(Habits.HABITS_ENTRY_SAVE);
+                }
+            } else {
+                // Questions can be skipped: the day is done without answers.
+                let done_x = x;
+                if (entry_state.answer_count > 0n) {
+                    let half = (width - gap) / 2n;
+                    if (
+                        Button({
+                            session: Model.CurrentSession(),
+                            props: {
+                                id: 5730004n,
+                                bounds: Shared.Bounds(x, y, half, button_height),
+                                label: Model.Locale("skip_button"),
+                                tone: ButtonTone.ButtonToneNeutral,
+                                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                            }
+                        })
+                    ) {
+                        Model.EntryAsk(Habits.HABITS_ENTRY_SKIP);
+                    }
+                    done_x = x + half + gap;
+                }
+                if (
+                    Button({
+                        session: Model.CurrentSession(),
+                        props: {
+                            id: 5730003n,
+                            bounds: Shared.Bounds(done_x, y, x + width - done_x, button_height),
+                            label: Model.Locale("done_button"),
+                            tone: ButtonTone.ButtonToneAccent,
+                            emphasis: ButtonEmphasis.ButtonEmphasisFilled
+                        }
+                    })
+                ) {
+                    Model.EntryAsk(Habits.HABITS_ENTRY_SAVE);
+                }
+            }
+        }
     });
     if (frame.dismissed || frame.right_clicked) {
         Model.EntryAsk(Habits.HABITS_ENTRY_CANCEL);
         return;
     }
-    if (!frame.opened) {
-        return;
-    }
-    let content = frame.layout.content;
-    let x = s32(content.x);
-    let y = s32(content.y);
-    let width = s32(content.width);
-    let day_text =
-        entry_state.day === entry_state.today
-            ? Model.Locale("habits_today")
-            : Model.DateText(entry_state.day);
-    <Text
-        session={Model.CurrentSession()}
-        props={{
-            bounds: Shared.Bounds(x, y - date_lift, width, date_height),
-            text: day_text,
-            size: Model.look_small_font,
-            class_name: Model.look_muted,
-            wrap: NativeText.Wrap.TextWrapNone
-        }}
-    />;
-    y += date_room;
-    AnswerArea(Shared.Bounds(x, y, width, area_height));
-    y += area_height + gap;
-    if (entry_state.existing) {
-        let half = (width - gap) / 2n;
-        if (
-            Button({
-                session: Model.CurrentSession(),
-                props: {
-                    id: 5730001n,
-                    bounds: Shared.Bounds(x, y, half, button_height),
-                    label: Model.Locale("delete_button"),
-                    tone: ButtonTone.ButtonToneDanger,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }
-            })
-        ) {
-            Model.EntryAsk(Habits.HABITS_ENTRY_DELETE);
-        }
-        if (
-            Button({
-                session: Model.CurrentSession(),
-                props: {
-                    id: 5730002n,
-                    bounds: Shared.Bounds(x + half + gap, y, width - half - gap, button_height),
-                    label: Model.Locale("save_button"),
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                }
-            })
-        ) {
-            Model.EntryAsk(Habits.HABITS_ENTRY_SAVE);
-        }
-    } else {
-        // Questions can be skipped: the day is done without answers.
-        let done_x = x;
-        if (entry_state.answer_count > 0n) {
-            let half = (width - gap) / 2n;
-            if (
-                Button({
-                    session: Model.CurrentSession(),
-                    props: {
-                        id: 5730004n,
-                        bounds: Shared.Bounds(x, y, half, button_height),
-                        label: Model.Locale("skip_button"),
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                    }
-                })
-            ) {
-                Model.EntryAsk(Habits.HABITS_ENTRY_SKIP);
-            }
-            done_x = x + half + gap;
-        }
-        if (
-            Button({
-                session: Model.CurrentSession(),
-                props: {
-                    id: 5730003n,
-                    bounds: Shared.Bounds(done_x, y, x + width - done_x, button_height),
-                    label: Model.Locale("done_button"),
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                }
-            })
-        ) {
-            Model.EntryAsk(Habits.HABITS_ENTRY_SAVE);
-        }
-    }
-    End(Model.CurrentSession());
 }
 
 export function HabitsEntryView(message: Habits.HabitsMessage): Habits.HabitsMessage {
-    const entry_state = Model.CurrentEntry();
+    const entry_state: NativeRef<HabitsEntryFrame> = Model.CurrentEntry();
     Model.SetEntry(Model.ReadHabitsEntryHost());
     Model.SetSession(entry_state.session);
     Model.look_scale = entry_state.scale;

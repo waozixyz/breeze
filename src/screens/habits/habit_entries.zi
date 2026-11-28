@@ -318,7 +318,10 @@ HabitEntryDescribe :: (habit: *Habit, entry: *HabitEntrySummary) {
 
 // ---- The entry dialog, which Habits draws ------------------------------------
 
-habit_entry_frame: HabitsEntryFrame;
+HabitEntryUiContext :: struct {
+    app: *InnerBreeze
+    frame: *HabitsEntryFrame
+}
 habit_entry_frame_codec: WidgetHabitsEntryFrameCodec;
 habit_entry_answer_codec: WidgetHabitsAnswerCodec;
 
@@ -357,14 +360,15 @@ HabitEntryKeepAnswer :: (app: *InnerBreeze, index: s32, changed: HabitsAnswer) -
 
 HabitEntryCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    host := cast(*HabitEntryUiContext)context
     if TextFromCString(module) != "habit_day_view" {
-        return WidgetHostCall(context, module, function, arguments, count, result)
+        return WidgetHostCall(cast(*void)host.app, module, function, arguments, count, result)
     }
-    app := cast(*InnerBreeze)context
+    app := host.app
     dialog := *app.habits.answer_dialog
     name := TextFromCString(function)
     if name == "ReadHabitsEntryHost" && count == 0 {
-        result.* = WidgetEncodeHabitsEntryFrame(habit_entry_frame, *habit_entry_frame_codec)
+        result.* = WidgetEncodeHabitsEntryFrame(host.frame.*, *habit_entry_frame_codec)
         return 1
     }
     if name == "WriteHabitsEntryHost" && count == 1 && WidgetValidHabitsEntryFrame(arguments[0]) {
@@ -373,7 +377,7 @@ HabitEntryCall :: (context: *void, module: *u8, function: *u8,
             unused TextInputWriteClipboard(observed.clipboard_text)
         }
         observed.clipboard_text = ""
-        habit_entry_frame = observed
+        host.frame.* = observed
         return 1
     }
     if name == "ReadHabitsAnswerHost" && count == 1 &&
@@ -396,10 +400,14 @@ HabitEntryCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "HabitsLocaleHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleText(key)
-        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
-            .data = HostTextData(text), .length = cast(usize)text.count}
+        reply: HostValue
+        {
+            key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            text := LocaleText(key)
+            reply = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+                .data = HostTextData(text), .length = cast(usize)text.count}
+        }
+        result.* = reply
         return 1
     }
     return 0
@@ -428,7 +436,7 @@ HabitScreenEntryDialog :: (app: *InnerBreeze) {
     }
     habit := *app.habits.items[index]
     typed: [64]u8
-    habit_entry_frame = HabitsEntryFrame.{
+    frame := HabitsEntryFrame.{
         .session = app.ui.session, .scale = MetricsScale(), .view_height = app.ui.view_height,
         .font = AppFontSize(), .small_font = AppSmallFontSize(),
         .muted_class = MutedTextClass(),
@@ -442,19 +450,19 @@ HabitScreenEntryDialog :: (app: *InnerBreeze) {
         .focus = dialog.focus, .cursor = dialog.cursor, .anchor = dialog.anchor,
         .scroll_x = dialog.scroll_x, .scroll = dialog.scroll,
         .input = SampleTextFieldInput(dialog.focus >= 0, typed[:])}
-    habit_entry_frame.input.focus = dialog.request_focus
+    frame.input.focus = dialog.request_focus
     dialog.request_focus = false
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
-    AppsUiBegin(HabitEntryCall, cast(*void)app)
+    host := HabitEntryUiContext.{.app = app, .frame = *frame}
+    AppsUiBegin(HabitEntryCall, cast(*void)(*host))
     drawn := HabitsRun(HabitsMessage.{.action = HABITS_ENTRY_VIEW})
     AppsUiEnd()
     WidgetHostEnd()
     if !drawn.succeeded {
-        habit_entry_frame = HabitsEntryFrame.{}
         app_close_modal(app)
         return
     }
-    observed := *habit_entry_frame
+    observed := *frame
     dialog.start = HabitEntryMinutes(observed.start)
     dialog.end = HabitEntryMinutes(observed.end)
     dialog.focus = ifx observed.focus >= 0 && observed.focus < dialog.count then observed.focus else -1
@@ -463,7 +471,6 @@ HabitScreenEntryDialog :: (app: *InnerBreeze) {
     dialog.scroll_x = observed.scroll_x
     dialog.scroll = observed.scroll
     action := observed.action
-    habit_entry_frame = HabitsEntryFrame.{}
     if action == HABITS_ENTRY_CANCEL {
         app_close_modal(app)
     } else if action == HABITS_ENTRY_SAVE {

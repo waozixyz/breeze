@@ -1,3 +1,4 @@
+import { ResolvedModal } from "kryon/tsx/modal";
 import * as Shared from "habit_shared";
 // The habit editor: a habit's details (its name, description, colour and
 // icon), its routine (how it repeats, its days and when it reminds), and how
@@ -29,7 +30,6 @@ import { TextAlign } from "kryon/text_align";
 import { TextHeight } from "kryon/text_measure";
 import * as NativeToggle from "kryon/toggle";
 import { ToggleSize } from "kryon/toggle_measure";
-import { End } from "kryon/tree";
 import { Box } from "kryon/tsx/box";
 import { Button } from "kryon/tsx/button";
 import { Checkbox } from "kryon/tsx/checkbox";
@@ -1601,7 +1601,7 @@ function Form(): void {
         },
         children: (scrolled: NativeScroll.ScrollResult): void => {
             const edit_state = Model.CurrentEditor();
-            edit_state.scroll = scrolled.scroll_offset;
+            nativeDeref(edit_state).scroll = scrolled.scroll_offset;
             let y = s32(scrolled.content.y) + Model.Scale(8n);
             let titles: [string, string, string] = [
                 Model.Locale("habit_details_title"),
@@ -1747,98 +1747,104 @@ function PracticePicker(): void {
     if (width > Model.Scale(400n)) {
         width = Model.Scale(400n);
     }
-    let frame = NativeModal.Draw(edit_state.session, {
-        key: NativeLayout.KeyHash("habit/edit/practices"),
-        title: Model.Locale("habit_link_practices"),
-        width: width,
-        height: Model.Scale(160n + edit_state.practice_count * 42n),
-        scale: edit_state.scale
+    let frame = ResolvedModal({
+        session: edit_state.session,
+        props: {
+            key: NativeLayout.KeyHash("habit/edit/practices"),
+            title: Model.Locale("habit_link_practices"),
+            width: width,
+            height: Model.Scale(160n + edit_state.practice_count * 42n),
+            scale: edit_state.scale
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            let content = frame.layout.content;
+            let x = s32(content.x);
+            let y = s32(content.y);
+            let width = s32(content.width);
+            let hint = Model.Locale("habit_link_practices_hint");
+            let hint_height = TextHeight(edit_state.session, {
+                text: hint,
+                size: edit_state.font,
+                bounds: Shared.Bounds(0n, 0n, width, 0n),
+                wrap: NativeText.Wrap.TextWrapAuto
+            });
+            Label(hint, x, y, width, hint_height);
+            y += hint_height + Model.Scale(8n);
+            let choices_height = s32(content.y + content.height) - y - Model.Scale(52n);
+            if (choices_height < Model.Scale(40n)) {
+                choices_height = Model.Scale(40n);
+            }
+            const choices = Scroll({
+                session: edit_state.session,
+                props: {
+                    key: NativeLayout.KeyHash("habit/edit/practice-list"),
+                    bounds: Shared.Bounds(x, y, width, choices_height),
+                    scale: edit_state.scale,
+                    content_height: edit_state.practice_count * Model.Scale(42n),
+                    scroll_offset: Model.practice_scroll
+                },
+                children: (choices: NativeScroll.ScrollResult): void => {
+                    const edit_state = Model.CurrentEditor();
+                    Model.practice_scroll = choices.scroll_offset;
+                    let y = s32(choices.content.y);
+                    for (let index = s32(0n); index < edit_state.practice_count; index += s32(1)) {
+                        let practice = Model.ReadHabitsEditPracticeHost(index);
+                        let checkbox = Checkbox({
+                            session: edit_state.session,
+                            props: {
+                                id: 9120n + index,
+                                bounds: Shared.Bounds(
+                                    x,
+                                    y,
+                                    s32(choices.content.width),
+                                    Model.Scale(38n)
+                                ),
+                                label: practice.label,
+                                checked: Model.PracticeLinked(practice.mask),
+                                disabled:
+                                    Model.PracticeLinked(HABIT_LINK_DIARY) &&
+                                    practice.mask !== HABIT_LINK_DIARY
+                            }
+                        });
+                        if (checkbox.changed) {
+                            nativeDeref(edit_state).sync_activity = HabitLinkSelect(
+                                edit_state.sync_activity,
+                                practice.mask,
+                                checkbox.checked
+                            );
+                        }
+                        y += Model.Scale(42n);
+                    }
+                }
+            });
+            if (!choices.opened) {
+                Model.practice_scroll = choices.scroll_offset;
+            }
+            if (
+                Button({
+                    session: edit_state.session,
+                    props: {
+                        id: 9160n,
+                        bounds: {
+                            x: float32(x),
+                            y: content.y + content.height - float32(Model.Scale(44n)),
+                            width: float32(width),
+                            height: float32(Model.Scale(40n))
+                        },
+                        label: Model.Locale("done_button"),
+                        tone: ButtonTone.ButtonToneAccent,
+                        emphasis: ButtonEmphasis.ButtonEmphasisFilled
+                    }
+                })
+            ) {
+                Model.Ask(Habits.HABITS_EDIT_PRACTICES_DONE, -1n);
+            }
+        }
     });
     if (frame.dismissed) {
         Model.Ask(Habits.HABITS_EDIT_PRACTICES_DONE, -1n);
         return;
     }
-    if (!frame.opened) {
-        return;
-    }
-    let content = frame.layout.content;
-    let x = s32(content.x);
-    let y = s32(content.y);
-    width = s32(content.width);
-    let hint = Model.Locale("habit_link_practices_hint");
-    let hint_height = TextHeight(edit_state.session, {
-        text: hint,
-        size: edit_state.font,
-        bounds: Shared.Bounds(0n, 0n, width, 0n),
-        wrap: NativeText.Wrap.TextWrapAuto
-    });
-    Label(hint, x, y, width, hint_height);
-    y += hint_height + Model.Scale(8n);
-    let choices_height = s32(content.y + content.height) - y - Model.Scale(52n);
-    if (choices_height < Model.Scale(40n)) {
-        choices_height = Model.Scale(40n);
-    }
-    const choices = Scroll({
-        session: edit_state.session,
-        props: {
-            key: NativeLayout.KeyHash("habit/edit/practice-list"),
-            bounds: Shared.Bounds(x, y, width, choices_height),
-            scale: edit_state.scale,
-            content_height: edit_state.practice_count * Model.Scale(42n),
-            scroll_offset: Model.practice_scroll
-        },
-        children: (choices: NativeScroll.ScrollResult): void => {
-            const edit_state = Model.CurrentEditor();
-            Model.practice_scroll = choices.scroll_offset;
-            let y = s32(choices.content.y);
-            for (let index = s32(0n); index < edit_state.practice_count; index += s32(1)) {
-                let practice = Model.ReadHabitsEditPracticeHost(index);
-                let checkbox = Checkbox({
-                    session: edit_state.session,
-                    props: {
-                        id: 9120n + index,
-                        bounds: Shared.Bounds(x, y, s32(choices.content.width), Model.Scale(38n)),
-                        label: practice.label,
-                        checked: Model.PracticeLinked(practice.mask),
-                        disabled:
-                            Model.PracticeLinked(HABIT_LINK_DIARY) &&
-                            practice.mask !== HABIT_LINK_DIARY
-                    }
-                });
-                if (checkbox.changed) {
-                    edit_state.sync_activity = HabitLinkSelect(
-                        edit_state.sync_activity,
-                        practice.mask,
-                        checkbox.checked
-                    );
-                }
-                y += Model.Scale(42n);
-            }
-        }
-    });
-    if (!choices.opened) {
-        Model.practice_scroll = choices.scroll_offset;
-    }
-    if (
-        Button({
-            session: edit_state.session,
-            props: {
-                id: 9160n,
-                bounds: {
-                    x: float32(x),
-                    y: content.y + content.height - float32(Model.Scale(44n)),
-                    width: float32(width),
-                    height: float32(Model.Scale(40n))
-                },
-                label: Model.Locale("done_button"),
-                tone: ButtonTone.ButtonToneAccent,
-                emphasis: ButtonEmphasis.ButtonEmphasisFilled
-            }
-        })
-    ) {
-        Model.Ask(Habits.HABITS_EDIT_PRACTICES_DONE, -1n);
-    }
-    End(edit_state.session);
 }
 
 export function HabitsEditView(message: Habits.HabitsMessage): Habits.HabitsMessage {

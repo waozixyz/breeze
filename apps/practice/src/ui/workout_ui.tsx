@@ -1,3 +1,4 @@
+import { ResolvedModal } from "kryon/tsx/modal";
 import * as Layout from "kryon/layout";
 import * as NativeDropdown from "kryon/dropdown";
 import * as NativeModal from "kryon/modal";
@@ -5,7 +6,6 @@ import * as NativeText from "kryon/text";
 import { Rectangle } from "kryon/geometry";
 import { StyleTokenColor } from "kryon/drawing_props";
 import { TextAlign } from "kryon/text_align";
-import { End } from "kryon/tree";
 import { Box } from "kryon/tsx/box";
 import { Button } from "kryon/tsx/button";
 import { Text } from "kryon/tsx/text";
@@ -75,28 +75,30 @@ export function WorkoutManagerView(app: NativeRef<InnerBreeze>): void {
         height = AppScale(660n);
     }
     // The editor lays out its scroll scope in the resolved modal content rectangle.
-    const frame = NativeModal.Draw(app.ui.session, {
-        id: 28900n,
-        title: WorkoutTitle(WORKOUT_ROUTINE_CUSTOM),
-        width: AppScale(500n),
-        height: height,
-        scale: MetricsScale(),
-        has_left_action: true,
-        left_label: LocaleText("back_button"),
-        strong_title: true
+    const frame = ResolvedModal({
+        session: app.ui.session,
+        props: {
+            id: 28900n,
+            title: WorkoutTitle(WORKOUT_ROUTINE_CUSTOM),
+            width: AppScale(500n),
+            height: height,
+            scale: MetricsScale(),
+            has_left_action: true,
+            left_label: LocaleText("back_button"),
+            strong_title: true
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            const action = WorkoutBuilderDraw(
+                app,
+                frame.layout.content,
+                PracticeContentReady(s32(ExerciseType.EXERCISE_WORKOUT))
+            );
+            WorkoutManagerPlay(app, action);
+        }
     });
     if (frame.left_clicked || frame.dismissed) {
         WorkoutManagerBack(app);
         return;
-    }
-    if (frame.opened) {
-        const action = WorkoutBuilderDraw(
-            app,
-            frame.layout.content,
-            PracticeContentReady(s32(ExerciseType.EXERCISE_WORKOUT))
-        );
-        WorkoutManagerPlay(app, action);
-        End(app.ui.session);
     }
 }
 

@@ -20,6 +20,7 @@ Rules :: #import "apps/protocol";
 #import "widget_kind"
 #import "css/Css"
 #import, file "../storage/temporary_data.zi";
+Records :: #import, file "../storage/app_records.zi";
 #import, file "app_types.zi";
 #import, file "app_nav_state.zi";
 #import, file "app_launcher_state.zi";
@@ -32,6 +33,7 @@ Rules :: #import "apps/protocol";
 #import, file "launcher_policy.zi";
 #import, file "metrics.zi";
 #import, file "locale.zi";
+#import, file "text_buffers.zi";
 #import, file "assets.zi";
 #import, file "../widgets/bottom_nav.zi";
 #import, file "../platform/launcher_shortcut.zi";
@@ -110,9 +112,9 @@ LauncherAppKeep :: (group: *LauncherAppGroup, text: string) -> string {
     return text
 }
 
-LauncherAppReply :: (group: *LauncherAppGroup, status: string) -> string {
+LauncherAppReply :: (group: *LauncherAppGroup, status: string = "") -> string {
     bytes: Vec(u8)
-    BuilderPrint(*bytes, "{\"v\":1,\"status\":\"%\",\"request\":%}", status, group.sequence)
+    BuilderPrint(*bytes, "{\"v\":1,\"status\":\"%\",\"request\":%}", ifx status == "" then group.status else status, group.sequence)
     return LauncherAppKeep(group, BuilderFinish(bytes))
 }
 
@@ -176,7 +178,7 @@ LauncherAppService :: (context: *void, text: string) -> string {
     }
     if request.operation == Rules.APPS_STATUS {
         if request.request != group.sequence { return "" }
-        return LauncherAppReply(group, group.status)
+        return LauncherAppReply(group)
     }
     if request.operation == Rules.APPS_ICONS {
         return LauncherAppIcons(group, TextUntilNul(request.id[:]))
@@ -191,7 +193,7 @@ LauncherAppService :: (context: *void, text: string) -> string {
     group.pending = request
     group.has_pending = true
     group.status = "queued"
-    return LauncherAppReply(group, group.status)
+    return LauncherAppReply(group)
 }
 
 LauncherAppWidgets :: (context: *void, module: *u8, function: *u8,
@@ -284,7 +286,9 @@ LauncherAppDrain :: (group: *LauncherAppGroup) {
     !NodeAppInstalled(AppNavNodeSlot(route)) {
         // The controller's confirmation starts the download.
         slot := AppNavNodeSlot(route)
-        if NodeAppInstall(NodeAppName(slot)) != slot { group.status = "rejected"; return }
+        name: [Records.NODE_APP_NAME_MAX + 1]u8
+        if !AppCopyText(NodeAppName(slot), name[:]) { group.status = "rejected"; return }
+        if NodeAppInstall(TextUntilNul(name[:])) != slot { group.status = "rejected"; return }
         app.launcher_pending_node = slot + 1
         group.status = "queued"
         return
@@ -352,8 +356,6 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
     entry: LauncherAppEntry
     entry.route = route
     entry.package = LauncherAppPackage(route)
-    title := app_nav_route_label(route)
-    shape := app_nav_route_shape(route)
     builtin := route == APP_NAV_ROUTE_PROFILE
     installed := route >= 0 && (builtin || (group.owner.enabled_apps & app_nav_route_bit(route)) != 0 ||
         AppNavNodeSlot(route) >= 0)
@@ -378,8 +380,6 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
         id := PackageText("inbe.", name)
         unused CopyCString(id, entry.id[:])
         PackageFree(id)
-        title = NodeAppTitle(name)
-        shape = NodeAppCatalogIcon(name)
         size = NodeAppOfferSize(offer)
     }
     if group.count > 0 { BuilderPrint(bytes, ",") }
@@ -387,8 +387,16 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
     group.count += 1
     BuilderPrint(bytes, "{\"id\":")
     Rules.AppsWriteQuoted(bytes, TextUntilNul(entry.id[:]))
-    LauncherAppQuoted(bytes, "title", title)
-    LauncherAppQuoted(bytes, "icon_shape", shape)
+    // Serialize each borrowed property before the next lazy cache lookup.
+    // The document owns its bytes; no temporary title or icon copy is needed.
+    if route >= 0 {
+        LauncherAppQuoted(bytes, "title", app_nav_route_label(route))
+        LauncherAppQuoted(bytes, "icon_shape", app_nav_route_shape(route))
+    } else {
+        name := NodeAppOfferName(offer)
+        LauncherAppQuoted(bytes, "title", NodeAppTitle(name))
+        LauncherAppQuoted(bytes, "icon_shape", NodeAppCatalogIcon(name))
+    }
     // A picture is named only once it can be read: the host refuses a card
     // whose picture is missing, and with it the whole Apps screen. Lumi's
     // comes with its package, which opens after the first frame; until then

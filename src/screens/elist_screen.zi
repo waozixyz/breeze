@@ -66,6 +66,15 @@ elist_begin_input :: (app: *InnerBreeze, editing_item: s32,
     app.elist.editing_item = editing_item
 }
 
+// Returned messages carry owned snapshots of state text, so they keep
+// valid bytes while the screen mutates its input and list buffers.
+elist_message_completing: [37]u8;
+elist_message_selected: [37]u8;
+elist_message_id: [37]u8;
+elist_message_parent: [37]u8;
+elist_message_title: [ELIST_TITLE_SIZE]u8;
+elist_message_comment: [ELIST_COMMENT_SIZE]u8;
+
 elist_message_for :: (state: *EListState, action: s32, index: s32) -> ListsMessage {
     message: ListsMessage
     message.action = action
@@ -77,20 +86,26 @@ elist_message_for :: (state: *EListState, action: s32, index: s32) -> ListsMessa
     message.show_completed = state.show_completed
     message.input_error = state.input_error
     message.completing_until = state.completing_until
-    message.completing_id = AppTextFromCString(*state.completing_item[0], 37)
+    unused AppCopyText(AppTextFromCString(*state.completing_item[0], 37), elist_message_completing[:])
+    message.completing_id = AppTextFromCString(*elist_message_completing[0], 37)
     if state.selected_list >= 0 && state.selected_list < state.list_count {
         list := *state.lists[state.selected_list]
-        message.selected_id = AppTextFromCString(*list.id[0], 37)
+        unused AppCopyText(AppTextFromCString(*list.id[0], 37), elist_message_selected[:])
+        message.selected_id = AppTextFromCString(*elist_message_selected[0], 37)
         message.id = message.selected_id
         message.sort_order = list.sort_order
     }
     item_index := ifx action == LISTS_COMMIT then state.editing_item else index
     if item_index >= 0 && item_index < state.item_count {
         item := *state.items[item_index]
-        message.id = AppTextFromCString(*item.id[0], 37)
-        message.parent_id = AppTextFromCString(*item.list_id[0], 37)
-        message.title = AppTextFromCString(*item.title[0], ELIST_TITLE_SIZE)
-        message.comment = AppTextFromCString(*item.comment[0], ELIST_COMMENT_SIZE)
+        unused AppCopyText(AppTextFromCString(*item.id[0], 37), elist_message_id[:])
+        message.id = AppTextFromCString(*elist_message_id[0], 37)
+        unused AppCopyText(AppTextFromCString(*item.list_id[0], 37), elist_message_parent[:])
+        message.parent_id = AppTextFromCString(*elist_message_parent[0], 37)
+        unused AppCopyText(AppTextFromCString(*item.title[0], ELIST_TITLE_SIZE), elist_message_title[:])
+        message.title = AppTextFromCString(*elist_message_title[0], ELIST_TITLE_SIZE)
+        unused AppCopyText(AppTextFromCString(*item.comment[0], ELIST_COMMENT_SIZE), elist_message_comment[:])
+        message.comment = AppTextFromCString(*elist_message_comment[0], ELIST_COMMENT_SIZE)
         message.done = item.done
         message.sort_order = item.sort_order
     }
@@ -166,9 +181,13 @@ elist_accept_message :: (app: *InnerBreeze, message: ListsMessage) {
 }
 
 elist_commit_input :: (app: *InnerBreeze) {
-    message := elist_message_for(*app.elist, LISTS_COMMIT, -1)
-    message.title = AppTextFromCString(*app.elist.input[0], ELIST_TITLE_SIZE)
-    elist_accept_message(app, ListsRun(message))
+    observed: ListsMessage
+    {
+        message := elist_message_for(*app.elist, LISTS_COMMIT, -1)
+        message.title = AppTextFromCString(*app.elist.input[0], ELIST_TITLE_SIZE)
+        observed = ListsRun(message)
+    }
+    elist_accept_message(app, observed)
 }
 
 elist_content_bounds :: (app: *InnerBreeze) -> Rectangle {
@@ -181,18 +200,25 @@ elist_content_bounds :: (app: *InnerBreeze) -> Rectangle {
 }
 
 elist_select_list :: (app: *InnerBreeze, index: s32) {
-    message := elist_message_for(*app.elist, LISTS_SELECT, index)
-    elist_accept_message(app, ListsRun(message))
+    observed: ListsMessage
+    {
+        message := elist_message_for(*app.elist, LISTS_SELECT, index)
+        observed = ListsRun(message)
+    }
+    elist_accept_message(app, observed)
 }
 
 elist_set_done :: (app: *InnerBreeze, index: s32,
     done: s32, now: float64) -> bool {
-    message := elist_message_for(*app.elist, LISTS_SET_DONE, index)
-    message.done = done
-    message.now = now
-    message = ListsRun(message)
-    elist_accept_message(app, message)
-    return message.succeeded
+    observed: ListsMessage
+    {
+        message := elist_message_for(*app.elist, LISTS_SET_DONE, index)
+        message.done = done
+        message.now = now
+        observed = ListsRun(message)
+    }
+    elist_accept_message(app, observed)
+    return observed.succeeded
 }
 
 // The Lists ZX owns presentation and interaction. This adapter exposes only
@@ -207,11 +233,17 @@ elist_set_done :: (app: *InnerBreeze, index: s32,
 #import, file "../apps/hosted_assets.zi";
 #import, file "../apps/value_codec.zi";
 using HostValueKind;
-lists_ui: ListsUiFrame;
+ListsUiContext :: struct {
+    app: *InnerBreeze
+    frame: ListsUiFrame
+}
 lists_ui_codec: WidgetListsUiFrameCodec;
 lists_row_codec: WidgetListsUiRowCodec;
 lists_friends: [8192]u8;
-lists_sharing_source: string;
+// Screen-owned snapshot of the shared cache. Views of these bytes are
+// formed locally, never stored in a global, so storage reloads and saves
+// can rewrite the shared cache while rows are only borrowed per call.
+elist_shared_rows: [ListsSharedCacheCapacity]u8;
 // The invitations to lists, as indexes into the shared cache's invitations:
 // other apps' invitations, such as to a Chess game, are left out.
 lists_invitation_rows: Vec(s32);
@@ -224,13 +256,14 @@ lists_request_codec: WidgetListsUiRequestCodec;
 
 ListsUiCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    host := cast(*ListsUiContext)context
     if TextFromCString(module) != "lists_view" {
-        return WidgetHostCall(context, module, function, arguments, count, result)
+        return WidgetHostCall(cast(*void)host.app, module, function, arguments, count, result)
     }
-    app := cast(*InnerBreeze)context
+    app := host.app
     name := TextFromCString(function)
     if name == "ReadListsUiHost" && count == 0 {
-        result.* = WidgetEncodeListsUiFrame(lists_ui, *lists_ui_codec)
+        result.* = WidgetEncodeListsUiFrame(host.frame, *lists_ui_codec)
         return 1
     }
     if name == "WriteListsUiHost" && count == 1 && WidgetValidListsUiFrame(arguments[0]) {
@@ -292,17 +325,21 @@ ListsUiCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "ListsLocaleHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleText(key)
-        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
-            .data = HostTextData(text), .length = cast(usize)text.count}
+        reply: HostValue
+        {
+            key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            text := LocaleText(key)
+            reply = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+                .data = HostTextData(text), .length = cast(usize)text.count}
+        }
+        result.* = reply
         return 1
     }
     if name == "ReadListsSharingRowHost" && count == 2 &&
     HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) &&
     HostScalarValid(arguments[1], "bool", cast(s32)HostInteger) {
         invitation := arguments[1].integer != 0
-        source := ifx invitation then lists_sharing_source else AppTextFromCString(*lists_friends[0], 8192)
+        source := ifx invitation then AppTextFromCString(*elist_shared_rows[0], ListsSharedCacheCapacity) else AppTextFromCString(*lists_friends[0], 8192)
         array := FieldAt(source, 0, ifx invitation then "invitations" else "friends")
         index := cast(s32)arguments[0].integer
         if invitation {
@@ -389,59 +426,77 @@ draw_elist_screen :: (app: *InnerBreeze) {
     next_id := ListsNetworkNextId()
     defer { PackageFree(next_id) }
     unused storage_get_social_cache_json("friends.list", *lists_friends[0], 8192)
-    lists_sharing_source = ListsSharedCache()
-    invitations := FieldAt(lists_sharing_source, 0, "invitations")
+    unused AppCopyText(ListsSharedCache(), elist_shared_rows[:])
+    shared_rows := AppTextFromCString(*elist_shared_rows[0], ListsSharedCacheCapacity)
+    invitations := FieldAt(shared_rows, 0, "invitations")
     incoming: s32 = 0
     lists_invitation_count = 0
     VecClear(lists_invitation_rows)
-    for index: cast(s32)0..ArrayCount(lists_sharing_source, invitations) - 1 {
-        row := ElementAt(lists_sharing_source, invitations, index)
+    for index: cast(s32)0..ArrayCount(shared_rows, invitations) - 1 {
+        row := ElementAt(shared_rows, invitations, index)
         list_id: [64]u8
-        ListsCopyJson(lists_sharing_source, row, "list_id", list_id[:])
+        ListsCopyJson(shared_rows, row, "list_id", list_id[:])
         if !SharedIdLooksLikeList(AppTextFromCString(*list_id[0], 64)) {
             continue
         }
         unused VecPush(lists_invitation_rows, index)
         lists_invitation_count += 1
-        target := ReadString(lists_sharing_source, FieldAt(lists_sharing_source, row, "target"))
-        status := ReadString(lists_sharing_source, FieldAt(lists_sharing_source, row, "status"))
-        if SpanEqualsASCII(lists_sharing_source, target, storage_get_setting_text("sync_public_id")) &&
-        SpanEqualsASCII(lists_sharing_source, status, "pending") {
+        target := ReadString(shared_rows, FieldAt(shared_rows, row, "target"))
+        status := ReadString(shared_rows, FieldAt(shared_rows, row, "status"))
+        if SpanEqualsASCII(shared_rows, target, storage_get_setting_text("sync_public_id")) &&
+        SpanEqualsASCII(shared_rows, status, "pending") {
             incoming += 1
         }
     }
     unused AppFormatS64(incoming, lists_pending_number[:])
-    lists_ui = ListsUiFrame.{.session = app.ui.session,
-        .width = app.ui.view_width, .height = app.ui.view_height,
-        .bottom = app_content_bottom_reserved(app), .scale = MetricsScale(),
-        .input = SampleTextFieldInput(app.elist.input_focused != 0, typed[:]),
-        .value = AppTextFromCString(*app.elist.input[0], ELIST_TITLE_SIZE),
-        .cursor = app.elist.input_cursor, .anchor = app.elist.input_anchor,
-        .scroll_x = app.elist.input_scroll_x, .focused = app.elist.input_focused != 0,
-        .comment_input = SampleTextAreaInput(app.elist.comment_focused != 0, comment_typed[:]),
-        .comment_value = AppTextFromCString(*app.elist.input_comment[0], ELIST_COMMENT_SIZE),
-        .comment_cursor = app.elist.comment_cursor, .comment_anchor = app.elist.comment_anchor,
-        .comment_scroll_y = app.elist.comment_scroll_y,
-        .comment_focused = app.elist.comment_focused != 0,
-        .task_priority = app.elist.task_priority,
-        .scroll = app.elist.scroll, .tab_scroll = app.elist.tab_scroll,
-        .panel = app.elist.panel, .sharing_status = lists_status,
-        .sharing_busy = ListsNetworkSaving(), .sharing_pending = ListsNetworkNeedsRetry(),
-        .connected = ListsNetworkReady(), .public_id = storage_get_setting_text("sync_public_id"),
-        .friend_count = ArrayCount(AppTextFromCString(*lists_friends[0], 8192),
-            FieldAt(AppTextFromCString(*lists_friends[0], 8192), 0, "friends")),
-        .invitation_count = lists_invitation_count,
-        .pending_count_text = AppTextFromCString(*lists_pending_number[0], 24),
-        .next_id = next_id, .profile_icon = app.profile_picture_icon}
-    message := elist_message_for(*app.elist, LISTS_FRAME, -1)
-    message.now = HostSeconds()
-    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
-    AppsUiBegin(ListsUiCall, cast(*void)app)
-    message = ListsUiRun(message)
-    AppsUiEnd()
-    WidgetHostEnd()
-    lists_ui = ListsUiFrame.{}
-    lists_sharing_source = ""
+    // The frame hands the guest its own copies of the input text, so the
+    // screen stays free to reload and rewrite its input buffers while the
+    // hosted composition and later message handling run.
+    input_value: [ELIST_TITLE_SIZE]u8
+    comment_value: [ELIST_COMMENT_SIZE]u8
+    unused AppCopyText(AppTextFromCString(*app.elist.input[0], ELIST_TITLE_SIZE), input_value[:])
+    unused AppCopyText(AppTextFromCString(*app.elist.input_comment[0], ELIST_COMMENT_SIZE), comment_value[:])
+    public_id_value: [128]u8
+    unused AppCopyText(storage_get_setting_text("sync_public_id"), public_id_value[:])
+    message: ListsMessage
+    {
+        frame := ListsUiFrame.{.session = app.ui.session,
+            .width = app.ui.view_width, .height = app.ui.view_height,
+            .bottom = app_content_bottom_reserved(app), .scale = MetricsScale(),
+            .input = SampleTextFieldInput(app.elist.input_focused != 0, typed[:]),
+            .value = AppTextFromCString(*input_value[0], ELIST_TITLE_SIZE),
+            .cursor = app.elist.input_cursor, .anchor = app.elist.input_anchor,
+            .scroll_x = app.elist.input_scroll_x, .focused = app.elist.input_focused != 0,
+            .comment_input = SampleTextAreaInput(app.elist.comment_focused != 0, comment_typed[:]),
+            .comment_value = AppTextFromCString(*comment_value[0], ELIST_COMMENT_SIZE),
+            .comment_cursor = app.elist.comment_cursor, .comment_anchor = app.elist.comment_anchor,
+            .comment_scroll_y = app.elist.comment_scroll_y,
+            .comment_focused = app.elist.comment_focused != 0,
+            .task_priority = app.elist.task_priority,
+            .scroll = app.elist.scroll, .tab_scroll = app.elist.tab_scroll,
+            .panel = app.elist.panel, .sharing_status = lists_status,
+            .sharing_busy = ListsNetworkSaving(), .sharing_pending = ListsNetworkNeedsRetry(),
+            .connected = ListsNetworkReady(),
+            .public_id = AppTextFromCString(*public_id_value[0], 128),
+            .friend_count = ArrayCount(AppTextFromCString(*lists_friends[0], 8192),
+                FieldAt(AppTextFromCString(*lists_friends[0], 8192), 0, "friends")),
+            .invitation_count = lists_invitation_count,
+            .pending_count_text = AppTextFromCString(*lists_pending_number[0], 24),
+            .next_id = next_id, .profile_icon = app.profile_picture_icon}
+        request := elist_message_for(*app.elist, LISTS_FRAME, -1)
+        request.now = HostSeconds()
+        WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+        host := ListsUiContext.{.app = app, .frame = frame}
+        AppsUiBegin(ListsUiCall, cast(*void)(*host))
+        message = ListsUiRun(request)
+        AppsUiEnd()
+        WidgetHostEnd()
+    }
+    // Guest calls have finished consuming these borrowed frame encodings.
+    lists_ui_codec = .{}
+    lists_row_codec = .{}
+    lists_person_codec = .{}
+    lists_request_codec = .{}
     PackageFree(lists_prepared_body)
     lists_prepared_body = ""
     if !message.succeeded && !(message.action == LISTS_COMMIT && message.input_error != 0) {

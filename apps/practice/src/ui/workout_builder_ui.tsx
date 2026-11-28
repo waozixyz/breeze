@@ -1,3 +1,4 @@
+import { Scroll } from "kryon/tsx/scroll";
 import * as Layout from "kryon/layout";
 import * as NativeField from "kryon/text_field";
 import * as NativeScroll from "kryon/scroll";
@@ -9,18 +10,17 @@ import { TextAlign } from "kryon/text_align";
 import { Wrap } from "kryon/text_props";
 import { Box } from "kryon/tsx/box";
 import { Button } from "kryon/tsx/button";
-import { End } from "kryon/tree";
 import { SortableIndicator, SortableItem } from "kryon/tsx/sortable";
 import { Spinbox } from "kryon/tsx/spinbox";
 import { Text } from "kryon/tsx/text";
-import { ControlledTextField } from "kryon/tsx/text_field";
+import { TextField } from "kryon/tsx/text_field";
 import { InnerBreeze } from "app_types";
 import { MutedTextClass } from "cards";
 import { HostSeconds } from "host_clock";
 import { LocaleText } from "locale";
 import { AppFontSize, AppScale, AppSmallFontSize } from "metrics";
-import { FormatArg, FrameTextHold } from "text_buffers";
-import { SampleTextFieldInput } from "text_input_host";
+import { FormatArg } from "text_buffers";
+import { PackageFree, PackageText } from "package_files";
 import {
     workout_builder,
     WORKOUT_BUILDER_EDITOR,
@@ -33,7 +33,6 @@ import {
     WORKOUT_BUILDER_ROW_GROUP,
     WORKOUT_BUILDER_STAY,
     WorkoutBuilderAcceptInsertion,
-    WorkoutBuilderApplyField,
     WorkoutBuilderBack,
     WorkoutBuilderButtonProps,
     WorkoutBuilderCanGroup,
@@ -46,13 +45,14 @@ import {
     WorkoutBuilderDropped,
     WorkoutBuilderEdit,
     WorkoutBuilderExercise,
-    WorkoutBuilderFieldInputBytes,
     WorkoutBuilderFits,
     WorkoutBuilderFormat,
     WorkoutBuilderFreeSlot,
     WorkoutBuilderGroupChosen,
     WorkoutBuilderGroupDetail,
     WorkoutBuilderGroupTitle,
+    WorkoutBuilderTitleBuffer,
+    WorkoutBuilderTextBuffer,
     WorkoutBuilderHeaderHeight,
     WorkoutBuilderIndent,
     WorkoutBuilderInsertionAt,
@@ -111,19 +111,22 @@ function WorkoutBuilderField(
     bounds: Rectangle,
     key: string
 ): boolean {
-    let typed = WorkoutBuilderFieldInputBytes();
-    const input = SampleTextFieldInput(state.focused, nativeSlice(typed));
-    const props = NativeField.StateProps(nativeDeref(state), {
-        key: Layout.KeyHash(key),
-        id: field,
-        focus_id: field,
-        bounds: bounds,
-        label: LocaleText(key),
-        placeholder: LocaleText(key),
-        input: input
+    const result = TextField({
+        session: app.ui.session,
+        state: state,
+        props: {
+            key: Layout.KeyHash(key),
+            id: field,
+            focus_id: field,
+            bounds: bounds,
+            label: LocaleText(key),
+            placeholder: LocaleText(key)
+        }
     });
-    const result = ControlledTextField({ session: app.ui.session, props: props });
-    return WorkoutBuilderApplyField(state, result);
+    if (result.committed || result.escaped) {
+        state.focused = false;
+    }
+    return result.changed;
 }
 
 function WorkoutBuilderCard(
@@ -313,12 +316,14 @@ function WorkoutBuilderBlockLabels(
     );
     let left = bounds.x + pad * 2.0 + size;
     let right = workout_builder.choosing ? float32(AppScale(48n)) : pad * 2.0;
+    let detail = WorkoutBuilderDetail(node);
     WorkoutBuilderLabels(
         app,
         { x: left, y: bounds.y + pad, width: bounds.x + bounds.width - left - right, height: size },
         name,
-        WorkoutBuilderDetail(app, node)
+        detail
     );
+    PackageFree(detail);
 }
 
 function WorkoutBuilderGroupFace(
@@ -332,14 +337,17 @@ function WorkoutBuilderGroupFace(
     let selected = row.node === workout_builder.selected && !workout_builder.choosing;
     let chosen = workout_builder.choosing && nativeAt(workout_builder.chosen, row.node);
     let key = Layout.KeyHash("workout/builder/group") + u64(row.node) * 8n;
-    let title = WorkoutBuilderGroupTitle(app, node);
+    let title_buffer = WorkoutBuilderTitleBuffer();
+    let title = PackageText(WorkoutBuilderGroupTitle(node, nativeSlice(title_buffer)), "");
     if (selected || chosen) {
         WorkoutBuilderCard(app, key, bounds, true, "surface");
     }
     if (WorkoutBuilderPress(app, row_index, bounds, key + 1n, title, selected || chosen)) {
+        PackageFree(title);
         return true;
     }
     WorkoutBuilderGroupLabels(app, row.node, bounds, title);
+    PackageFree(title);
     if (workout_builder.choosing) {
         WorkoutBuilderCheck(app, key + 2n, bounds, chosen);
     }
@@ -354,6 +362,7 @@ function WorkoutBuilderGroupLabels(
 ): void {
     let pad = float32(AppScale(12n));
     let right = workout_builder.choosing ? float32(AppScale(48n)) : pad;
+    let detail_buffer = WorkoutBuilderTextBuffer();
     WorkoutBuilderLabels(
         app,
         {
@@ -363,7 +372,7 @@ function WorkoutBuilderGroupLabels(
             height: bounds.height - float32(AppScale(8n))
         },
         title,
-        WorkoutBuilderGroupDetail(app, index)
+        WorkoutBuilderGroupDetail(index, nativeSlice(detail_buffer))
     );
 }
 
@@ -374,6 +383,7 @@ function WorkoutBuilderGroupEnd(
 ): void {
     let node = nativeRef(nativeAt(workout_builder.draft.nodes, row.node));
     let args: [FormatArg, FormatArg] = [{ number: node.repeats }, { number: node.rest }];
+    let text_buffer = WorkoutBuilderTextBuffer();
     <Text
         session={app.ui.session}
         props={{
@@ -383,7 +393,11 @@ function WorkoutBuilderGroupEnd(
                 width: bounds.width - float32(AppScale(24n)),
                 height: bounds.height
             },
-            text: WorkoutBuilderFormat(app, "workout_custom_group_end", nativeSlice(args)),
+            text: WorkoutBuilderFormat(
+                "workout_custom_group_end",
+                nativeSlice(args),
+                nativeSlice(text_buffer)
+            ),
             size: AppSmallFontSize(),
             class_name: MutedTextClass(),
             vertical_align: TextAlign.TextAlignCenter,
@@ -396,7 +410,7 @@ function WorkoutBuilderSpin(
     app: NativeRef<InnerBreeze>,
     id: u64,
     bounds: Rectangle,
-    label: string,
+    label_key: string,
     value: s32,
     minimum: s32,
     maximum: s32,
@@ -412,12 +426,14 @@ function WorkoutBuilderSpin(
                 width: bounds.width,
                 height: float32(AppScale(24n))
             },
-            text: label,
+            text: LocaleText(label_key),
             size: AppSmallFontSize(),
             wrap: Wrap.TextWrapEllipsis
         }}
     />;
     let shown: [FormatArg] = [{ number: value }];
+    let text_buffer = WorkoutBuilderTextBuffer();
+    let value_text = WorkoutBuilderFormat(value_key, nativeSlice(shown), nativeSlice(text_buffer));
     let result = Spinbox({
         session: app.ui.session,
         props: {
@@ -428,12 +444,12 @@ function WorkoutBuilderSpin(
                 width: bounds.width,
                 height: bounds.height - float32(AppScale(24n))
             },
-            label: label,
+            label: LocaleText(label_key),
             min: minimum,
             max: maximum,
             step: step,
             value: value,
-            value_text: WorkoutBuilderFormat(app, value_key, nativeSlice(shown))
+            value_text: value_text
         }
     });
     return result.changed ? result.value : value;
@@ -452,7 +468,7 @@ function WorkoutBuilderSettings(app: NativeRef<InnerBreeze>, index: s32, area: R
             app,
             1n,
             WorkoutBuilderSlice(area, y, spin_h, 0n, 2n),
-            LocaleText("workout_custom_rounds"),
+            "workout_custom_rounds",
             node.repeats,
             1n,
             WORKOUT_PLAN_REPEAT_MAX,
@@ -466,7 +482,7 @@ function WorkoutBuilderSettings(app: NativeRef<InnerBreeze>, index: s32, area: R
             app,
             2n,
             WorkoutBuilderSlice(area, y, spin_h, 1n, 2n),
-            LocaleText("workout_custom_round_rest"),
+            "workout_custom_round_rest",
             node.rest,
             0n,
             WORKOUT_CUSTOM_REST_MAX,
@@ -481,7 +497,7 @@ function WorkoutBuilderSettings(app: NativeRef<InnerBreeze>, index: s32, area: R
             app,
             3n,
             WorkoutBuilderSlice(area, y, spin_h, 0n, 2n),
-            LocaleText("workout_custom_length"),
+            "workout_custom_length",
             node.seconds,
             WORKOUT_CUSTOM_MIN_SECONDS,
             WORKOUT_CUSTOM_MAX_SECONDS,
@@ -495,7 +511,7 @@ function WorkoutBuilderSettings(app: NativeRef<InnerBreeze>, index: s32, area: R
             app,
             4n,
             WorkoutBuilderSlice(area, y, spin_h, 1n, 2n),
-            LocaleText("workout_custom_rest"),
+            "workout_custom_rest",
             node.rest,
             0n,
             WORKOUT_CUSTOM_REST_MAX,
@@ -618,16 +634,31 @@ function WorkoutBuilderSettings(app: NativeRef<InnerBreeze>, index: s32, area: R
 
 function WorkoutBuilderTotals(app: NativeRef<InnerBreeze>, bounds: Rectangle): void {
     let times = WorkoutPlanTimesOf(nativeRef(workout_builder.draft));
-    let text = LocaleText("workout_custom_empty");
+    let text_buffer = WorkoutBuilderTextBuffer();
+    let text = "";
     if (times.valid) {
+        let total_buffer = WorkoutBuilderTextBuffer();
+        let active_buffer = WorkoutBuilderTextBuffer();
         let args: [FormatArg, FormatArg, FormatArg] = [
-            { text: WorkoutBuilderClock(app, times.total_seconds), is_text: true },
-            { text: WorkoutBuilderClock(app, times.active_seconds), is_text: true },
+            {
+                text: WorkoutBuilderClock(times.total_seconds, nativeSlice(total_buffer)),
+                is_text: true
+            },
+            {
+                text: WorkoutBuilderClock(times.active_seconds, nativeSlice(active_buffer)),
+                is_text: true
+            },
             { number: times.steps }
         ];
-        text = WorkoutBuilderFormat(app, "workout_custom_summary", nativeSlice(args));
-    } else if (workout_builder.draft.count > 0n) {
-        text = LocaleText("workout_custom_too_long");
+        text = WorkoutBuilderFormat(
+            "workout_custom_summary",
+            nativeSlice(args),
+            nativeSlice(text_buffer)
+        );
+    } else {
+        text = LocaleText(
+            workout_builder.draft.count > 0n ? "workout_custom_too_long" : "workout_custom_empty"
+        );
     }
     <Text
         session={app.ui.session}
@@ -678,7 +709,7 @@ function WorkoutBuilderList(
             props: WorkoutBuilderButtonProps(
                 u64(40n + slot),
                 WorkoutBuilderSlice(area, y, height),
-                FrameTextHold(nativeRef(app.ui.frame_text), label),
+                label,
                 nativeAt(workout_builder.slots, slot).count === 0n
             )
         });
@@ -773,6 +804,7 @@ function WorkoutBuilderPick(app: NativeRef<InnerBreeze>, area: Rectangle, bounds
             name
         );
         let left = tile_bounds.x + pad * 2.0 + size;
+        let detail = WorkoutBuilderDetail(nativeRef(node));
         WorkoutBuilderLabels(
             app,
             {
@@ -782,8 +814,9 @@ function WorkoutBuilderPick(app: NativeRef<InnerBreeze>, area: Rectangle, bounds
                 height: size
             },
             name,
-            WorkoutBuilderDetail(app, nativeRef(node))
+            detail
         );
+        PackageFree(detail);
     }
     let heading = false;
     for (let saved: s32 = s32(0n); saved < WORKOUT_CUSTOM_ROUTINE_LIMIT; saved += 1n) {
@@ -811,10 +844,7 @@ function WorkoutBuilderPick(app: NativeRef<InnerBreeze>, area: Rectangle, bounds
         let key = Layout.KeyHash("workout/builder/pick/routine") + u64(saved) * 4n;
         WorkoutBuilderCard(app, key, tile_bounds, false, "surface");
         let name_buffer = WorkoutBuilderNameBuffer();
-        let name = FrameTextHold(
-            nativeRef(app.ui.frame_text),
-            WorkoutPlanName(routine, nativeSlice(name_buffer))
-        );
+        let name = WorkoutPlanName(routine, nativeSlice(name_buffer));
         const routineClicked = Button({
             session: app.ui.session,
             props: {
@@ -852,8 +882,13 @@ function WorkoutBuilderPick(app: NativeRef<InnerBreeze>, area: Rectangle, bounds
         }
         let times = WorkoutPlanTimesOf(routine);
         let left = tile_bounds.x + pad * 2.0 + size;
+        let total_buffer = WorkoutBuilderTextBuffer();
+        let detail_buffer = WorkoutBuilderTextBuffer();
         let args: [FormatArg, FormatArg] = [
-            { text: WorkoutBuilderClock(app, times.total_seconds), is_text: true },
+            {
+                text: WorkoutBuilderClock(times.total_seconds, nativeSlice(total_buffer)),
+                is_text: true
+            },
             { number: times.steps }
         ];
         WorkoutBuilderLabels(
@@ -865,7 +900,11 @@ function WorkoutBuilderPick(app: NativeRef<InnerBreeze>, area: Rectangle, bounds
                 height: size
             },
             name,
-            WorkoutBuilderFormat(app, "workout_custom_routine_detail", nativeSlice(args))
+            WorkoutBuilderFormat(
+                "workout_custom_routine_detail",
+                nativeSlice(args),
+                nativeSlice(detail_buffer)
+            )
         );
     }
 }
@@ -989,7 +1028,10 @@ function WorkoutBuilderLiftedRow(app: NativeRef<InnerBreeze>): void {
             WorkoutBuilderExercise(app, node.exercise)
         );
     } else {
-        WorkoutBuilderGroupLabels(app, row.node, ghost, WorkoutBuilderGroupTitle(app, node));
+        let title_buffer = WorkoutBuilderTitleBuffer();
+        let title = PackageText(WorkoutBuilderGroupTitle(node, nativeSlice(title_buffer)), "");
+        WorkoutBuilderGroupLabels(app, row.node, ghost, title);
+        PackageFree(title);
     }
     // The landing place stays visible over the lifted block.
     let moved: WorkoutPlan = {};
@@ -1190,12 +1232,20 @@ export function WorkoutBuilderView(
 ): s32 {
     const viewport = WorkoutBuilderScrollProps(bounds);
     // Update the next frame's drag scroll before drawing this frame's content.
-    const scroll = NativeScroll.Draw(app.ui.session, viewport.props);
-    WorkoutBuilderScrollOffset(bounds, viewport.offset, scroll);
+    let action: s32 = s32(WORKOUT_BUILDER_STAY);
+    const action_ref = nativeRef(action);
+    const scroll = Scroll({
+        session: app.ui.session,
+        props: viewport.props,
+        children: (scroll: NativeScroll.ScrollResult): void => {
+            WorkoutBuilderScrollOffset(bounds, viewport.offset, scroll);
+
+            nativeDeref(action_ref) = WorkoutBuilderPage(app, scroll.content, bounds, ready);
+        }
+    });
     if (!scroll.opened) {
+        WorkoutBuilderScrollOffset(bounds, viewport.offset, scroll);
         return WORKOUT_BUILDER_STAY;
     }
-    const action = WorkoutBuilderPage(app, scroll.content, bounds, ready);
-    End(app.ui.session);
     return action;
 }

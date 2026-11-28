@@ -3,6 +3,7 @@ import * as NativeText from "kryon/text";
 import * as NativeToggle from "kryon/toggle";
 import { app_sync_loading } from "app_sync";
 import { InnerBreeze } from "app_types";
+import { PackageFree } from "package_files";
 import { color_with_alpha } from "color";
 import { CssClass } from "css/Css";
 import { DarkenColor, StyleTokenColor } from "kryon/drawing_props";
@@ -19,18 +20,13 @@ import {
     ProfileNodeStorageActive,
     ProfileNodeStorageAddress,
     ProfileNodeStorageBarColor,
-    ProfileNodeStorageHold,
     ProfileNodeStoragePad,
     ProfileNodeStorageSetMedia,
     ProfileNodeStorageVisible
 } from "profile_node_storage";
 
 import { NativePresent } from "native_flags";
-import {
-    SyncMediaLocalBytes,
-    SyncNodeDisplayName,
-    SyncNodeStoragePercent
-} from "sync_node_storage";
+import { SyncMediaLocalBytes, SyncNodeStoragePercent } from "sync_node_storage";
 import { SyncNodeCount } from "sync_nodes";
 
 function ProfileNodeStorageText(
@@ -112,9 +108,8 @@ function ProfileDrawNodeCard(
             TextAlign.TextAlignCenter
         );
     }
-    let name = ProfileNodeStorageHold(app, SyncNodeDisplayName(address));
     let name_props: NativeText.Props = {};
-    name_props.text = name;
+    name_props.text = card.name;
     name_props.size = AppFontSize();
     name_props.wrap = Wrap.TextWrapNone;
     name_props.bounds = {
@@ -234,33 +229,39 @@ function ProfileDrawNodeCard(
     top = top + AppScale(6n);
     let toggle_w = AppScale(50n);
     let toggle_h = AppScale(28n);
-    let label = LocaleText("profile_node_storage_media");
-    let label_props: NativeText.Props = {};
-    label_props.text = label;
-    label_props.size = AppFontSize();
-    label_props.wrap = Wrap.TextWrapAuto;
-    label_props.vertical_align = TextAlign.TextAlignCenter;
-    label_props.bounds = {
-        x: float32(left),
-        y: float32(top),
-        width: float32(inner - toggle_w - AppScale(12n)),
-        height: float32(AppScale(44n))
-    };
-    <Text session={app.ui.session} props={label_props} />;
-    let toggle: NativeToggle.Props = {};
-    toggle.id = 63000n + index;
-    toggle.bounds = {
-        x: float32(left + inner - toggle_w),
-        y: float32(top + (AppScale(44n) - toggle_h) / 2n),
-        width: float32(toggle_w),
-        height: float32(toggle_h)
-    };
-    toggle.value = card.media;
-    toggle.label = label;
-    toggle.disabled = app_sync_loading() !== 0n;
-    let result = Toggle({ session: app.ui.session, props: toggle });
-    if (result.changed) {
-        ProfileNodeStorageSetMedia(app, address, result.value, card.active);
+    let media_changed = false;
+    let media_value = card.media;
+    {
+        let label = LocaleText("profile_node_storage_media");
+        let label_props: NativeText.Props = {};
+        label_props.text = label;
+        label_props.size = AppFontSize();
+        label_props.wrap = Wrap.TextWrapAuto;
+        label_props.vertical_align = TextAlign.TextAlignCenter;
+        label_props.bounds = {
+            x: float32(left),
+            y: float32(top),
+            width: float32(inner - toggle_w - AppScale(12n)),
+            height: float32(AppScale(44n))
+        };
+        <Text session={app.ui.session} props={label_props} />;
+        let toggle: NativeToggle.Props = {};
+        toggle.id = 63000n + index;
+        toggle.bounds = {
+            x: float32(left + inner - toggle_w),
+            y: float32(top + (AppScale(44n) - toggle_h) / 2n),
+            width: float32(toggle_w),
+            height: float32(toggle_h)
+        };
+        toggle.value = card.media;
+        toggle.label = label;
+        toggle.disabled = app_sync_loading() !== 0n;
+        let result = Toggle({ session: app.ui.session, props: toggle });
+        media_changed = result.changed;
+        media_value = result.value;
+    }
+    if (media_changed) {
+        ProfileNodeStorageSetMedia(app, address, media_value, card.active);
     }
     top = top + AppScale(44n);
     let hint = LocaleText(
@@ -303,29 +304,33 @@ export function ProfileNodeStorageView(
         }}
     />;
     nativeDeref(y) = nativeDeref(y) + AppScale(30n);
-    const hint = LocaleText("profile_node_storage_hint");
-    const small = AppSmallFontSize();
-    const hintHeight = AppParagraphHeight(hint, width, small, 0n);
-    ProfileNodeStorageText(
-        app,
-        hint,
-        x,
-        nativeDeref(y),
-        width,
-        hintHeight,
-        small,
-        "storage-detail",
-        TextAlign.TextAlignStart
-    );
-    nativeDeref(y) = nativeDeref(y) + hintHeight + AppScale(10n);
-    const active = ProfileNodeStorageActive(app);
+    {
+        const hint = LocaleText("profile_node_storage_hint");
+        const small = AppSmallFontSize();
+        const hintHeight = AppParagraphHeight(hint, width, small, 0n);
+        ProfileNodeStorageText(
+            app,
+            hint,
+            x,
+            nativeDeref(y),
+            width,
+            hintHeight,
+            small,
+            "storage-detail",
+            TextAlign.TextAlignStart
+        );
+        nativeDeref(y) = nativeDeref(y) + hintHeight + AppScale(10n);
+    }
+    const active = ProfileNodeStorageActive();
     const mediaBytes = SyncMediaLocalBytes();
     const count = SyncNodeCount();
     for (let index: s32 = s32(0n); index < count; index += 1n) {
-        const address = ProfileNodeStorageAddress(app, index);
-        const card = ProfileNodeCardFor(app, address, active, mediaBytes, width);
+        const address = ProfileNodeStorageAddress(index);
+        const card = ProfileNodeCardFor(app, address, active, mediaBytes, width, true);
         ProfileDrawNodeCard(app, index, address, card, x, nativeDeref(y), width);
+        PackageFree(address);
         nativeDeref(y) = nativeDeref(y) + card.height + AppScale(10n);
     }
+    PackageFree(active);
     nativeDeref(y) = nativeDeref(y) + AppScale(8n);
 }
