@@ -12,6 +12,7 @@ webp=${WEBP_A:-$root/vendor-builds/linux/x86_64/kryon-webp/libkryonwebp.a}
 test -f "$webp"
 # The radio player decodes MP3 with Ziran's dr_mp3 archive.
 audio=$root/vendor-builds/linux/x86_64/audio-codecs
+rm -rf "$work/generated" "$work/wrong-record" "$work/wrong-scalar"
 mkdir -p "$work/generated" "$work/wrong-record" "$work/wrong-scalar"
 if [ -z "${APPS_TEST_BUNDLES:-}" ]; then
     sh "$root/scripts/build-apps.sh" "$ziran"
@@ -28,7 +29,7 @@ for shape in wrong-record wrong-scalar; do
         argument='"wrong"'
         type='string'
     fi
-    cat > "$work/$shape/lists.zi" <<ZIRAN
+    cat > "$work/$shape/invalid_lists.zi" <<ZIRAN
 #import, file "../../../src/apps/lists_types.zi";
 #import, file "../../../apps/lists/src/native/lists_view.zi";
 host_api :: #system_library "host_api";
@@ -46,7 +47,7 @@ Main :: () -> s32 {
 }
 ZIRAN
     "$ziran" bundle --project --offline --root "$root" --module-path "$work/$shape" \
-        --define KRYON_HOSTED_UI --entry lists:Main -o "$work/$shape.zx" "$work/$shape/lists.zi"
+        --define KRYON_HOSTED_UI --entry invalid_lists:Main -o "$work/$shape.zx" "$work/$shape/invalid_lists.zi"
 done
 "$ziran" bundle --project --offline --root "$root" \
     --define KRYON_HOSTED_UI --entry main:main -o "$work/missing-assets.zx" \
