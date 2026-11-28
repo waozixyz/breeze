@@ -1,4 +1,4 @@
-"""First-run Apps, saved preferences and Quit on a private display/profile."""
+"""First-run Practices, saved preferences and Quit on a private display/profile."""
 import contextlib
 import json
 import os
@@ -118,7 +118,7 @@ with tempfile.TemporaryDirectory(prefix="profile-", dir=OUTPUT) as temporary, co
                 stop(app)
 
     receipts = {}
-    # Both root artifacts open the ready-to-use Apps library and migrate old
+    # Both root artifacts open Practices and migrate old
     # navigation settings without rewriting an owner's saved app preferences.
     for full in (False, True):
         profile = Path(temporary) / ("full" if full else "base")
@@ -142,6 +142,9 @@ with tempfile.TemporaryDirectory(prefix="profile-", dir=OUTPUT) as temporary, co
                 db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,2) "
                            "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", (user, key, str(value)))
         with application(profile, profile.name + "-all", *args) as (app, window, log):
+            driver.wait(label="Start Practice", role="button")
+            assert not driver.find(label="Pinned", visible=True), "Startup opened Apps"
+            driver.press(key=in_navigation("Apps")["key"])
             # The Apps library lists every app, with Profile and Settings.
             driver.wait(label="Apps", role="text")
             for label in ("Lumi", "Habits", "Practice", "Lists", "Diary", "Profile", "Settings"):

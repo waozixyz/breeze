@@ -1,4 +1,4 @@
-"""Verify first-start Apps, existing profiles and temporary mini practices.
+"""Verify first-start Practices, existing profiles and temporary mini practices.
 
 The app runs with Kryon's test driver: controls are found in its widget tree
 and pressed through its own pointer path.
@@ -138,15 +138,17 @@ def application(profile, label, *, mini=False, feature=None, graceful_close=Fals
 result = {"display": os.environ["DISPLAY"], "deployment": False}
 with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
     profile = Path(temporary)
-    # First start asks about voice guidance before opening the Apps library.
-    with application(profile, "fresh-apps") as (window, log):
+    # First start asks about voice guidance before opening Practices.
+    with application(profile, "fresh-practices") as (window, log):
         driver.wait(label="Add voice guidance?")
         assert settings(profile)["language_setup_done"] == "0"
         driver.press(label="Not now", role="button")
         wait_setting(profile, "language_setup_done", 1)
-        driver.wait(label="Pinned")
+        driver.wait(contains="Step 1 of", role="text")
+        assert not driver.find(label="Pinned", visible=True), "First start opened Apps"
         saved = settings(profile)
-        assert saved["apps_setup_done"] == "0"
+        assert saved["apps_setup_done"] == "1"
+        assert saved["main_tab"] == "1"
         assert saved["language_setup_done"] == "1"
         # A new profile comes with every app the app ships, Lumi, Habits and
         # Practice pinned in that order. They are defaults, not choices:
@@ -164,15 +166,18 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
                             for name in ("lists", "habits", "practices", "diary", "lumi", "leaderboard")}, defaults
         assert queued == 0, "a new profile queued its default apps"
         assert "app_order" not in saved, "a new profile sent its default pins"
-    # Closing before opening a tile keeps first-start Apps on restart.
-    with application(profile, "resume-apps") as (window, log):
+        key(window, "Escape", lambda: settings(profile).get("tutorial_seen") == "1")
+    # Restart keeps Practices; the Apps library remains an explicit action.
+    with application(profile, "resume-practices") as (window, log):
+        driver.wait(label="Start Practice", role="button")
+        assert not driver.find(label="Pinned", visible=True), "Restart opened Apps"
+        driver.press(label="Apps", role="button")
         driver.wait(label="Pinned")
         # Right completes the single launcher guide step.
         guide = "Step 1 of 1"
         driver.wait(label=guide)
         key(window, "Right", lambda: not driver.find(label=guide, visible=True))
         wait_setting(profile, "launcher_guide_seen", 1)
-        # The existing question is asked once, after the launcher guide.
         driver.wait(label="Don't allow", role="button")
         driver.press(label="Don't allow", role="button")
         wait_setting(profile, "package_updates_allowed", 0)
@@ -185,7 +190,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         driver.press(key=card["key"], label="Lists")
         wait_setting(profile, "apps_setup_done", 1)
         wait_setting(profile, "main_tab", 2)
-        wait_log(log, "screen=21->16")
+        wait_log(log, "screen=0->16")
     with sqlite3.connect(profile / "inbe.db") as db:
         user = db.execute("SELECT id FROM users WHERE kind='local'").fetchone()[0]
         db.execute("INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) VALUES(?,?,?,0,0,1)",
@@ -296,9 +301,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
                 "-set", "_HARMONY_APP_FEATURE", "1")
         wait_log(log, "->16")
     result.update(
-        first_start_apps_library=True, system_language=True,
-        default_apps_lumi_habits_practice=True, default_apps_not_sent=True, restart_in_onboarding=True,
-        open_tile_completes_setup=True, explicit_feature_cli=True,
+        first_start_practices=True, system_language=True,
+        default_apps_lumi_habits_practice=True, default_apps_not_sent=True, restart_preserves_practices=True,
+        opening_apps_preserves_setup=True, explicit_feature_cli=True,
         same_runtime_feature_property=True, mini_lists_only_and_zero_apps=True,
         mini_starts_practice_without_profile_writes=True,
         mini_expansion_preserves_selection_and_session=True,

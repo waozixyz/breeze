@@ -912,6 +912,12 @@ with contextlib.ExitStack() as stack:
                 assert settings(profile)["language_setup_done"] == "0"
                 driver.press(label="Not now", role="button")
                 wait_setting(profile, "language_setup_done", 1, log.read_text())
+                wait_setting(profile, "apps_setup_done", 1, log.read_text())
+                wait_setting(profile, "main_tab", 1, log.read_text())
+                driver.wait(contains="Step 1 of", role="text")
+                assert not driver.find(label="Pinned", visible=True), "First start opened Apps"
+                key(window, "Escape", lambda: settings(profile).get("tutorial_seen") == "1")
+                driver.press(label="Apps", role="button")
                 driver.wait(label="Pinned")
                 assert settings(profile).get("launcher_guide_seen", "0") == "0"
                 driver.wait(contains="This is Apps.", role="text")
@@ -921,8 +927,7 @@ with contextlib.ExitStack() as stack:
                 if arguments.guide_only:
                     print("Apps guide: one screen, one step, no obsolete trash instructions, completion saved")
                     raise SystemExit(0)
-                # The existing update question appears after the guide and
-                # remembers its answer, without another connection dialog.
+                # The update question follows the explicit Apps guide.
                 driver.wait(label="Don't allow", role="button")
                 driver.press(label="Don't allow", role="button")
                 wait_setting(profile, "package_updates_allowed", 0)

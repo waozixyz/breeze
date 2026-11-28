@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Open Practices after first-run setup, preserving saved app choices.
+
 - Organize app sources under `src/` with a clear `main.zi` program entry.
 
 - Rebuild the app picker with Kryon’s TSX components.
