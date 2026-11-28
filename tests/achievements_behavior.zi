@@ -40,6 +40,7 @@
 
 test_entry: AchievementDefinition;
 test_habits: Habits;
+starter_habits: Habits;
 test_apps: s32;
 test_packs: s32;
 
@@ -454,6 +455,20 @@ Check :: () -> s32 {
     check_true("replace profile clears alert preference", AchievementAlerts())
     check_int("replace profile clears local presentation receipts", storage_get_setting_int("achievement.receipt.self.first", 0), 0)
     check_int("achievement reset preserves unrelated preferences", storage_get_setting_int("unrelated_preference", 0), 7)
+    storage_close()
+    check_true("open starter habit profile", storage_init(make_root("starter-habits")) != 0)
+    AchievementReset()
+    check_int("seed the initial meditation habit", habits_seed_default_set_if_needed(*starter_habits), 1)
+    unused AchievementHabitCreatedBackfill(0)
+    check_int("setup does not count as creating a habit", metric_value("habit.created", "count"), 0)
+    check_int("create a personal habit beside the starter", habits_add_custom(*starter_habits, "Personal habit", Color.{}, 0, 0), 1)
+    unused AchievementHabitCreatedBackfill(0)
+    check_int("a habit the person creates still counts", metric_value("habit.created", "count"), 1)
+    habit_set_day_count(*starter_habits, 0, 20261018, 1)
+    storage_habits_save(cast(*void)*starter_habits)
+    unused AchievementHabitDaysBackfill(*starter_habits, 0)
+    check_int("actually completing a starter habit still counts", metric_value("habit.completed", "count"), 1)
+    habits_free(*starter_habits)
     storage_close()
     check_true("open purge profile", storage_init(make_root("source-purge")) != 0)
     AchievementReset()

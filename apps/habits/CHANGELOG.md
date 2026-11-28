@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Award habit creation for habits you create; starter habits earn milestones through actual use.
+
 - Migrate the Habits screens and dialogs to Kryon TSX, with focused list, row and history modules under `src/ui/` and a `src/main.zi` program entry.
 
 - Fix a GPU rendering seam through the **+ New Habit** button.
