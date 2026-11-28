@@ -10,8 +10,7 @@ cd "$root"
 "$bin/ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c \
     --define ANDROID_BUILD --define KRYON_ANDROID_HOST --root "$root/tests" \
     -o "$work/c" "$source"
-set -- "$work/c"/p*_paint_queue.h
-printf '#include "%s"\n' "${1##*/}" > "$work/c/kryon_raster_test_backend.h"
+printf '#include "kryon__paint_queue.h"\n' > "$work/c/kryon_raster_test_backend.h"
 "${CC:-cc}" -std=c11 -D_DEFAULT_SOURCE -O2 -pthread \
     -ffunction-sections -fdata-sections -I"$root/build/packages/ziran/include" \
     -iquote "$work/c" "$root/tests/kryon_raster_test_host.c" "$work/c"/*.c \

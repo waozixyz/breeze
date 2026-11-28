@@ -2,6 +2,8 @@
     #import "android_clipboard"
 }
 #import "text_input"
+#import "session"
+#import "tree_input"
 TextArea :: #import "kryon/text_area";
 TextField :: #import "kryon/text_field";
 // A UI test types through KRYON_TEST_DRIVER; otherwise inactive.
@@ -18,39 +20,13 @@ TextField :: #import "kryon/text_field";
 #if #defined(DESKTOP_HOST) {
     Desktop :: #import "desktop_runtime";
     Keyboard :: #import "desktop_keyboard";
+    Frame :: #import "kryon/tree_frame";
     #import "byte_text_linux"
 
-    TEXT_INPUT_TYPED_LIMIT :: 64
-    text_input_typed: [TEXT_INPUT_TYPED_LIMIT]s32;
-    text_input_typed_count: s32;
-    text_input_typed_next: s32;
     text_input_clipboard: [4097]u8;
 
-    // Takes the text the window received since the last frame, in order,
-    // and drops its key events, which the keyboard state already reports.
-    // Text typed while no field was focused is dropped with the frame.
-    TextInputBeginFrame :: () {
-        text_input_typed_count = 0
-        text_input_typed_next = 0
-        queue := Desktop.DesktopInputQueue()
-        while queue.count > 0 {
-            event := queue.events[queue.head]
-            queue.head = (queue.head + 1) % cast(s32)queue.events.count
-            queue.count -= 1
-            if event.text && text_input_typed_count < TEXT_INPUT_TYPED_LIMIT {
-                text_input_typed[text_input_typed_count] = event.code
-                text_input_typed_count += 1
-            }
-        }
-    }
-
     TextInputGetCharPressed :: () -> s32 {
-        if text_input_typed_next >= text_input_typed_count {
-            return 0
-        }
-        codepoint := text_input_typed[text_input_typed_next]
-        text_input_typed_next += 1
-        return codepoint
+        return TypedCodepointTake(text_input_frame_session)
     }
 
     TextInputIsKeyPressed :: (key: s32) -> bool {
@@ -146,17 +122,77 @@ TextInputKeyLeftControl :: 341;
 TextInputKeyRightShift :: 344;
 TextInputKeyRightControl :: 345;
 
+text_input_frame_session: Session;
+text_input_frame_key: s32;
+text_input_frame_modifiers: s32;
+
+// Publish the host's ordered text once. Public bindings and app-owned editors
+// consume the same session queue, so switching between them cannot lose or
+// duplicate a character. An editing key never overtakes its preceding text.
+TextInputBeginFrame :: (session: Session, modifiers: s32, navigation_key: s32) {
+    key := navigation_key
+    #if #defined(DESKTOP_HOST) {
+        queue := Desktop.DesktopInputQueue()
+        TestDriverInput(queue)
+        unused Frame.TreeFrameKeys(session, queue, modifiers)
+        key = KeyboardTake(session)
+        modifiers = KeyboardModifiers(session)
+    } else #if #defined(PLATFORM_WEB) {
+        key, modifiers = CanvasHost.CanvasInputTake(session)
+    } else {
+        #if #defined(ANDROID_BUILD) {
+            AndroidTextInputBeginFrame(session)
+        }
+        editing_keys := s32.[TextInputKeyBackspace, TextInputKeyDelete,
+        TextInputKeyLeft, TextInputKeyRight, TextInputKeyUpArrow,
+        TextInputKeyDownArrow, TextInputKeyHome, TextInputKeyEnd,
+        TextInputKeyPageUp, TextInputKeyPageDown, TextInputKeyA,
+        TextInputKeyC, TextInputKeyV, TextInputKeyX,
+        TextInputKeyEnter, TextInputKeyEscape]
+        for candidate: editing_keys {
+            if TextInputKeyPressed(candidate) {
+                key = candidate
+                break
+            }
+        }
+        while TypedCodepointCapacity(session) > 0 {
+            codepoint := TextInputHostCharacter()
+            if codepoint == 0 {
+                break
+            }
+            unused TypedCodepointSend(session, codepoint)
+        }
+    }
+    text_input_frame_session = session
+    text_input_frame_key = key
+    text_input_frame_modifiers = modifiers
+    unused KeyboardSend(session, key)
+    unused KeyboardModifiersSend(session, modifiers)
+}
+
+TextInputEndFrame :: () {
+    // Typing without a focused editor must not appear in a later field.
+    while TypedCodepointTake(text_input_frame_session) != 0 {
+    }
+    text_input_frame_session = .{}
+    text_input_frame_key = 0
+    text_input_frame_modifiers = 0
+}
+
 // Deleting and moving the cursor repeat while their key is held, as in any
 // text editor; other keys act once per press.
 TextInputKeyRepeats :: (key: s32) -> bool {
     return key == TextInputKeyBackspace || key == TextInputKeyDelete ||
-        key == TextInputKeyLeft || key == TextInputKeyRight ||
-        key == TextInputKeyUpArrow || key == TextInputKeyDownArrow ||
-        key == TextInputKeyPageUp || key == TextInputKeyPageDown
+    key == TextInputKeyLeft || key == TextInputKeyRight ||
+    key == TextInputKeyUpArrow || key == TextInputKeyDownArrow ||
+    key == TextInputKeyPageUp || key == TextInputKeyPageDown
 }
 
 #program_export
 TextInputKeyPressed :: (key: s32) -> bool {
+    if SessionValid(text_input_frame_session) {
+        return text_input_frame_key == key
+    }
     if TestDriverKeyPressed(key) {
         return true
     }
@@ -173,11 +209,26 @@ TextInputKeyPressed :: (key: s32) -> bool {
 
 #program_export
 TextInputKeyDown :: (key: s32) -> bool {
+    if SessionValid(text_input_frame_session) {
+        if key == TextInputKeyLeftControl || key == TextInputKeyRightControl {
+            return (text_input_frame_modifiers & KeyModifierControl) != 0
+        }
+        if key == TextInputKeyLeftShift || key == TextInputKeyRightShift {
+            return (text_input_frame_modifiers & KeyModifierShift) != 0
+        }
+    }
     return TestDriverKeyDown(key) || TextInputIsKeyDown(key)
 }
 
 #program_export
 TextInputCharacter :: () -> s32 {
+    if SessionValid(text_input_frame_session) {
+        return TypedCodepointTake(text_input_frame_session)
+    }
+    return TextInputHostCharacter()
+}
+
+TextInputHostCharacter :: () -> s32 {
     driven := TestDriverCodepoint()
     if driven != 0 {
         return driven
@@ -222,19 +273,19 @@ TextInputAppendCodepoint :: (bytes: []u8, used: s32,
     if used + width >= cast(s32)bytes.count { return used }
     if width == {
         case 1;
-            bytes[used] = cast(u8)codepoint
+        bytes[used] = cast(u8)codepoint
         case 2;
-            bytes[used] = cast(u8)(192 + codepoint / 64)
-            bytes[used + 1] = cast(u8)(128 + codepoint % 64)
+        bytes[used] = cast(u8)(192 + codepoint / 64)
+        bytes[used + 1] = cast(u8)(128 + codepoint % 64)
         case 3;
-            bytes[used] = cast(u8)(224 + codepoint / 4096)
-            bytes[used + 1] = cast(u8)(128 + (codepoint / 64) % 64)
-            bytes[used + 2] = cast(u8)(128 + codepoint % 64)
+        bytes[used] = cast(u8)(224 + codepoint / 4096)
+        bytes[used + 1] = cast(u8)(128 + (codepoint / 64) % 64)
+        bytes[used + 2] = cast(u8)(128 + codepoint % 64)
         case;
-            bytes[used] = cast(u8)(240 + codepoint / 262144)
-            bytes[used + 1] = cast(u8)(128 + (codepoint / 4096) % 64)
-            bytes[used + 2] = cast(u8)(128 + (codepoint / 64) % 64)
-            bytes[used + 3] = cast(u8)(128 + codepoint % 64)
+        bytes[used] = cast(u8)(240 + codepoint / 262144)
+        bytes[used + 1] = cast(u8)(128 + (codepoint / 4096) % 64)
+        bytes[used + 2] = cast(u8)(128 + (codepoint / 64) % 64)
+        bytes[used + 3] = cast(u8)(128 + codepoint % 64)
     }
     used += width
     bytes[used] = cast(u8)0

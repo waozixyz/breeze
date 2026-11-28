@@ -8,6 +8,7 @@
 #import "text_input_platform"
 #import "kryon/tree"
 #import "tree_input"
+#import "key_input"
 #import "text_request"
 #import "widget_kind"
 using WidgetKind;
@@ -81,29 +82,39 @@ main :: () -> s32 {
     AndroidNativeTextCommit(null, null, 90)
     typed: [32]u8
     AndroidTextInputBeginFrame(session)
-    first := SampleTextFieldInput(true, typed[:])
-    if first.text != "é😀" || first.backspace || first.commit {
-        return 2
+    {
+        first := SampleTextFieldInput(true, typed[:])
+        if first.text != "é😀" || first.backspace || first.commit {
+            return 2
+        }
     }
     AndroidTextInputBeginFrame(session)
-    second := SampleTextFieldInput(true, typed[:])
-    if second.text.count != 0 || !second.backspace || second.commit {
-        return 3
+    {
+        second := SampleTextFieldInput(true, typed[:])
+        if second.text.count != 0 || !second.backspace || second.commit {
+            return 3
+        }
     }
     AndroidTextInputBeginFrame(session)
-    third := SampleTextFieldInput(true, typed[:])
-    if third.text.count != 0 || !third.backspace || third.commit {
-        return 4
+    {
+        third := SampleTextFieldInput(true, typed[:])
+        if third.text.count != 0 || !third.backspace || third.commit {
+            return 4
+        }
     }
     AndroidTextInputBeginFrame(session)
-    fourth := SampleTextAreaInput(true, typed[:])
-    if fourth.text.count != 0 || fourth.backspace || !fourth.enter || fourth.commit {
-        return 5
+    {
+        fourth := SampleTextAreaInput(true, typed[:])
+        if fourth.text.count != 0 || fourth.backspace || !fourth.enter || fourth.commit {
+            return 5
+        }
     }
     AndroidTextInputBeginFrame(session)
-    fifth := SampleTextFieldInput(true, typed[:])
-    if fifth.text != "Z" || fifth.backspace || fifth.commit {
-        return 6
+    {
+        fifth := SampleTextFieldInput(true, typed[:])
+        if fifth.text != "Z" || fifth.backspace || fifth.commit {
+            return 6
+        }
     }
     AndroidNativeTextCommit(null, null, 66)
     AndroidTextInputFrame(session, false)
@@ -143,9 +154,11 @@ main :: () -> s32 {
         return 12
     }
     AndroidTextInputBeginFrame(editor)
-    request := TextRequestTake(editor, node)
-    if !request.pending || !request.replace || request.value != "hello 水😀" || request.cursor != 13 {
-        return 13
+    {
+        request := TextRequestTake(editor, node)
+        if !request.pending || !request.replace || request.value != "hello 水😀" || request.cursor != 13 {
+            return 13
+        }
     }
     // Replacing a focused field changes its identity. Late IME callbacks from
     // the preceding editor must never overwrite the new field.
@@ -155,9 +168,11 @@ main :: () -> s32 {
         return 14
     }
     AndroidTextInputBeginFrame(editor)
-    request = TextRequestTake(editor, node)
-    if !request.pending || request.value != "new" {
-        return 15
+    {
+        request := TextRequestTake(editor, node)
+        if !request.pending || request.value != "new" {
+            return 15
+        }
     }
     AndroidTextInputFrame(editor, false)
     if AndroidTextEditorUpdate(7, 2, "after blur", 10, 10) {
@@ -165,5 +180,61 @@ main :: () -> s32 {
     }
     AndroidTextInputClose(editor)
     SessionClose(editor)
+
+    // The app host publishes once for both public widget bindings and
+    // app-owned editors. Neither path may steal or duplicate the other's text.
+    bridge := SessionOpen()
+    AndroidTextInputOpen(bridge)
+    AndroidTextInputFrame(bridge, true)
+    AndroidNativeTextCommit(null, null, 233)
+    AndroidNativeTextCommit(null, null, 128512)
+    AndroidNativeTextBackspace(null, null)
+    AndroidNativeTextEnter(null, null)
+    AndroidNativeTextCommit(null, null, 90)
+    TextInputBeginFrame(bridge, 0, 0)
+    published := TypedTextTake(bridge, typed[:]) == "é😀"
+    {
+        remaining := SampleTextFieldInput(true, typed[:])
+        if !published || remaining.text != "" ||
+        remaining.backspace || remaining.commit {
+            return 17
+        }
+    }
+    TextInputEndFrame()
+    TextInputBeginFrame(bridge, 0, 0)
+    {
+        edit := TextFieldInputFor(KeyboardTake(bridge), KeyboardModifiers(bridge),
+            TypedTextTake(bridge, typed[:]))
+        if !edit.backspace || edit.commit || edit.text != "" {
+            return 18
+        }
+    }
+    TextInputEndFrame()
+    TextInputBeginFrame(bridge, 0, 0)
+    {
+        edit := SampleTextFieldInput(true, typed[:])
+        if !edit.commit || edit.backspace || edit.text != "" {
+            return 19
+        }
+    }
+    TextInputEndFrame()
+    TextInputBeginFrame(bridge, 0, 0)
+    if SampleTextFieldInput(true, typed[:]).text != "Z" {
+        return 20
+    }
+    TextInputEndFrame()
+    AndroidNativeTextCommit(null, null, 88)
+    TextInputBeginFrame(bridge, 0, 0)
+    TextInputEndFrame()
+    TextInputBeginFrame(bridge, KeyModifierControl, 65)
+    {
+        edit := SampleTextFieldInput(true, typed[:])
+        if edit.text != "" || !edit.select_all {
+            return 21
+        }
+    }
+    TextInputEndFrame()
+    AndroidTextInputClose(bridge)
+    SessionClose(bridge)
     return 0
 }
