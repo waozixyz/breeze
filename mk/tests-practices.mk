@@ -46,8 +46,8 @@ patterns-session-zi-test: $(ZI2C_BIN)
 	@sh tests/patterns_session_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: session-results-zi-test
-session-results-zi-test: apps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A) $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS)
-	@sh tests/session_results_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
+session-results-zi-test: apps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A) $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS) $(WEBP_A)
+	@WEBP_A="$(abspath $(WEBP_A))" sh tests/session_results_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
 	@$(ZI2C_BIN) --no-main --root tests --module-path build/packages/ziran/std \
 		-o $(BUILD_DIR)/session-mood-generated tests/session_result_storage_behavior.zi
 	@$(CC) -std=c11 -Isrc/storage -Ibuild/packages/ziran/include \

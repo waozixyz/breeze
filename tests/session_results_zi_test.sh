@@ -4,6 +4,8 @@ set -eu
 # Storage import/export and migration behaviour, run against a real
 # SQLite database in a temporary directory.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+webp=${WEBP_A:-$root/vendor-builds/linux/x86_64/kryon-webp/libkryonwebp.a}
+test -f "$webp"
 ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 runtime_library=$(dirname "$ziran")/../libziran.a
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
@@ -84,7 +86,7 @@ C
     "$root/vendor-builds/linux/x86_64/audio-codecs/libvorbis.a" \
     "$root/vendor-builds/linux/x86_64/audio-codecs/libogg.a" \
     -Wl,--wrap=meditation_music_stop -Wl,--gc-sections -l:libcurl.so.4 -l:libopus.so.0 \
-    $(pkg-config --libs sdl2 cairo pangocairo fontconfig freetype2 gio-2.0 x11 libwebp libwebpdemux) \
+    "$webp" $(pkg-config --libs sdl2 cairo pangocairo fontconfig freetype2 gio-2.0 x11) \
     -ldl -lpthread -lz -lm -latomic -o "$work/test"
 # Storage must never open the real data directory.
 APP_DATA_ROOT="$work/data"

@@ -2,9 +2,11 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+webp=${WEBP_A:-$root/vendor-builds/linux/x86_64/kryon-webp/libkryonwebp.a}
+test -f "$webp"
 bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/sync-recovery-zi-test
-native_libraries=$(pkg-config --libs sdl2 cairo pangocairo fontconfig freetype2 gio-2.0 x11 libwebp libwebpdemux)
+native_libraries=$(pkg-config --libs sdl2 cairo pangocairo fontconfig freetype2 gio-2.0 x11)
 
 # Serialize concurrent checks before replacing the stable generated output.
 exec 9>"$work.lock"
@@ -43,7 +45,7 @@ sh scripts/run-ziran.sh "$bin/ziran" build --target=c --project --offline ${PACK
     "$root/vendor-builds/linux/x86_64/audio-codecs/libvorbis.a" \
     "$root/vendor-builds/linux/x86_64/audio-codecs/libogg.a" \
     "$root/vendor-builds/linux/x86_64/audio-codecs/libopus/libopus.a" \
-    $native_libraries -Wl,--wrap=app_monotonic_seconds \
+    "$webp" $native_libraries -Wl,--wrap=app_monotonic_seconds \
     -ldl -lpthread -lz -lm -latomic -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS "$work/test"
 echo "sync recovery Ziran/native test passed"

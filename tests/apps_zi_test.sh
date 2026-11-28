@@ -29,9 +29,8 @@ for shape in wrong-record wrong-scalar; do
         argument='"wrong"'
         type='string'
     fi
-    cat > "$work/$shape/invalid_lists.zi" <<ZIRAN
+    cat > "$work/$shape/lists.zi" <<ZIRAN
 #import, file "../../../src/apps/lists_types.zi";
-#import, file "../../../apps/lists/src/native/lists_view.zi";
 host_api :: #system_library "host_api";
 ReadListsHost :: () -> ListsMessage #foreign host_api;
 WriteListsHost :: (value: $type) #foreign host_api;
@@ -41,13 +40,12 @@ $declaration
 Main :: () -> s32 {
     message := ReadListsHost()
     if message.action == 0 { return 1 }
-    if message.action == LISTS_FRAME { unused ListsView(message) }
     WriteListsHost($argument)
     return PersistListsHost($argument)
 }
 ZIRAN
-    "$ziran" bundle --project --offline --root "$root" --module-path "$work/$shape" \
-        --define KRYON_HOSTED_UI --entry invalid_lists:Main -o "$work/$shape.zx" "$work/$shape/invalid_lists.zi"
+    "$ziran" bundle --project --offline --root "$root" \
+        --define KRYON_HOSTED_UI --entry lists:Main -o "$work/$shape.zx" "$work/$shape/lists.zi"
 done
 "$ziran" bundle --project --offline --root "$root" \
     --define KRYON_HOSTED_UI --entry main:main -o "$work/missing-assets.zx" \

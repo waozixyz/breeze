@@ -2,6 +2,8 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+webp=${WEBP_A:-$root/vendor-builds/linux/x86_64/kryon-webp/libkryonwebp.a}
+test -f "$webp"
 bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/elist-screen-zi-test
 mkdir -p "$work/c"
@@ -46,7 +48,7 @@ done
     "$root/vendor-builds/linux/x86_64/audio-codecs/libvorbisfile.a" \
     "$root/vendor-builds/linux/x86_64/audio-codecs/libvorbis.a" \
     "$root/vendor-builds/linux/x86_64/audio-codecs/libogg.a" \
-    $(pkg-config --libs sdl2 cairo pangocairo fontconfig freetype2 gio-2.0 x11 libwebp libwebpdemux) \
+    "$webp" $(pkg-config --libs sdl2 cairo pangocairo fontconfig freetype2 gio-2.0 x11) \
     -l:libopus.so.0 -l:libcurl.so.4 -lm -lpthread -ldl -lz -latomic \
     -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test" "$root/build/inbe.zx"

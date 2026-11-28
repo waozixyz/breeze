@@ -199,9 +199,9 @@ sync-status-test: $(ZI2C_BIN)
 		sh tests/sync_status_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: sync-recovery-test
-sync-recovery-test: build-laws $(ZI2C_BIN) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
+sync-recovery-test: build-laws $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS) $(AUDIO_OPUS_A) $(WEBP_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
-		sh tests/sync_recovery_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+		WEBP_A="$(abspath $(WEBP_A))" sh tests/sync_recovery_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: sync-connection-test
 sync-connection-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)

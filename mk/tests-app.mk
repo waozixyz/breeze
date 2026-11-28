@@ -165,8 +165,8 @@ modal-rules-test: build-laws $(ZI2C_BIN)
 	@sh tests/modal_rules_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: elist-screen-test
-elist-screen-test: apps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS)
-	@sh tests/elist_screen_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+elist-screen-test: apps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS) $(WEBP_A)
+	@WEBP_A="$(abspath $(WEBP_A))" sh tests/elist_screen_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: app-click-block-zi-test
 app-click-block-zi-test: $(ZI2C_BIN)
