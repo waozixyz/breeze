@@ -44,7 +44,8 @@ APP_PATHS = ("src", "droid", "apps", "assets", "locales", "themes", "fonts", "wi
 # Tooling under those paths that checks, tests, records or publishes the app
 # without becoming part of it. A new script counts as app until listed here.
 TOOLING = ("scripts/phone-check.py", "scripts/check-phone-check.py", "scripts/release.py",
-           "scripts/release-ready.sh", "scripts/check-*", "scripts/*test*", "scripts/upload-*",
+           "scripts/release-ready.sh", "scripts/release-ready-alpha.py", "scripts/check-*",
+           "scripts/*test*", "scripts/upload-*",
            "scripts/publish-*", "scripts/render-*", "scripts/screenshot-*",
            "scripts/generate-screenshots.sh", "scripts/moto-screenshot.sh", "scripts/emulator.sh",
            "scripts/create-avd.sh", "scripts/android-audio-e2e.sh",

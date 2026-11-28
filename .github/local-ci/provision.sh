@@ -1,6 +1,6 @@
 # The Test job's machine for `make release-ready`: the runner's Ubuntu, the
 # packages CI installs for native/browser tests, its pinned SDK and Bun.
-# scripts/release-ready.sh has Harmony's container service run this recipe as
+# scripts/release-ready.sh uses standard Podman to run this recipe as
 # root on the pinned base image (.github/local-ci/base-image), with the
 # candidate's .github folder at /run/harmony-container/context.tar, and commit
 # the result with these settings:

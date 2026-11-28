@@ -1064,7 +1064,7 @@ A release names one fixed commit while peers keep working on master:
    the intended source. Do not freeze the repository, dependency lock or
    another session's work.
 2. `RELEASE_READY_REVISION=COMMIT make release-ready` runs the local CI suites
-   in the Ubuntu 24.04 container with the candidate's locked packages:
+   on physical Alpha in the Ubuntu 24.04 container with the candidate's locked packages:
    Secret Scan, package URLs, file sizes, all tests, package
    compatibility, Chrome and muted Firefox smoke tests, and the pinned real
    Mesh sync server. Platform release builds remain separate. The existing
@@ -1073,6 +1073,13 @@ A release names one fixed commit while peers keep working on master:
    Outputs stay in `build/release-ready/`. Custom `RELEASE_READY_OUTPUT` names
    reuse that folder; only `build/release-ready-phone/` has a separate purpose.
    Both use the shared, leased cache described in [building](building.md).
+   The runner transfers missing Git objects without changing Alpha's refs or
+   working files, and carries the selected Bun binary with a hash check. It
+   copies a pass stamp back only after the full run succeeds and its commit
+   and content identities match. Provisioning uses standard Podman commands;
+   a failed recipe never becomes a reusable image. Reserve measured capacity
+   before starting; `RELEASE_READY_MEMORY`, `RELEASE_READY_CPU` and
+   `RELEASE_READY_CPUS` bound the Alpha scope (defaults: 6G, 200%, cores 2,3).
 3. Build the Moto APK in the same fixed-source overlay and save its content
    identity and SHA-256 build receipt. Use `ANDROID_VERIFY_INSTANCE=1` for
    the separate `xyz.waozi.inbe.verification` debug instance when the owner's

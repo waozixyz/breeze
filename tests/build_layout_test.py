@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("build_layout", ROOT / "scripts/check-build-layout.py")
@@ -18,10 +19,44 @@ layout = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(layout)
 
 
+class AlphaReleaseStampTest(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('alpha_release', ROOT / 'scripts/release-ready-alpha.py')
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+        temporary = tempfile.TemporaryDirectory(prefix='breeze-alpha-stamp-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.module.ROOT = self.root
+        self.module.git = mock.Mock(return_value="def release_content(root, commit): return 'expected'\n")
+        self.commit = 'a' * 40
+
+    def test_only_exact_actual_pass_is_recorded(self):
+        destination = self.root / 'build/release-ready/stamp.json'
+        for field, value in (('passed', False), ('commit', 'b' * 40), ('content', 'stale')):
+            data = dict(passed=True, commit=self.commit, content='expected')
+            data[field] = value
+            with self.assertRaises(RuntimeError):
+                self.module.record_stamp(json.dumps(data).encode(), 'build/release-ready', self.commit)
+            self.assertFalse(destination.exists())
+        stamp = json.dumps(dict(passed=True, commit=self.commit, content='expected')).encode()
+        self.module.record_stamp(stamp, 'build/release-ready', self.commit)
+        self.assertEqual(destination.read_bytes(), stamp)
+
+    def test_remote_pass_cannot_follow_local_output_symlink(self):
+        outside = self.root / 'unrelated'
+        outside.mkdir()
+        (self.root / 'build').symlink_to(outside, target_is_directory=True)
+        stamp = json.dumps(dict(passed=True, commit=self.commit, content='expected')).encode()
+        with self.assertRaises(RuntimeError):
+            self.module.record_stamp(stamp, 'build/release-ready', self.commit)
+        self.assertEqual(list(outside.iterdir()), [])
+
+
 class BuildLayoutTest(unittest.TestCase):
     def setUp(self):
         # Only fixtures and fake output are removed, never the project's build/.
-        parent = ROOT / "backup/build-layout-tests"
+        parent = Path(tempfile.gettempdir()) / "breeze-build-layout-tests"
         parent.mkdir(parents=True, exist_ok=True)
         temporary = tempfile.TemporaryDirectory(dir=parent)
         self.addCleanup(temporary.cleanup)
@@ -41,6 +76,8 @@ if args[0] == '-C':
     args = args[2:]
 if args[0] == 'rev-parse':
     print(args[1].split('^')[0])
+elif args[0] == 'show' and ':scripts/' in args[1]:
+    print(pathlib.Path('scripts/' + args[1].split(':scripts/', 1)[1]).read_text(), end='')
 elif args[0] == 'show':
     print(os.environ.get('FIXTURE_WINDOWS_INPUT', 'windows-v1') if args[1].endswith('.github/apt/windows-packages.txt') else 'fixed image inputs')
 elif args[0] == 'log':
@@ -55,10 +92,10 @@ import hashlib, json, os, pathlib, sys, time
 args = sys.argv[1:]
 if args[:2] == ['image', 'exists']:
     sys.exit(int(os.environ.get('FIXTURE_IMAGE_STATUS', '0')))
-if args[0] in ('pull', 'provision'):
+if args[0] in ('pull', 'create', 'start', 'commit', 'rm'):
     with open('image-builds.jsonl', 'a') as stream:
         stream.write(json.dumps(args) + '\\n')
-    sys.exit(0)
+    sys.exit(int(os.environ.get('FIXTURE_PROVISION_STATUS', '0')) if args[0] == 'start' else 0)
 assert args[0] == 'run', args
 mounts = [args[i+1] for i, value in enumerate(args) if value == '-v']
 home = pathlib.Path(next(value.rsplit(':', 1)[0] for value in mounts
@@ -93,7 +130,7 @@ sys.exit(int(os.environ.get('FIXTURE_STATUS', '0')))
         # The CI image runs JavaScript with Bun; tests may replace this one.
         self.executable("bun", "#!/bin/sh\nexit 0\n")
         self.environment = dict(os.environ, PATH=str(self.root / "bin") + ":" + os.environ["PATH"],
-                                RELEASE_READY_REVISION="1" * 40,
+                                RELEASE_READY_REVISION="1" * 40, RELEASE_READY_HOST="local",
                                 RELEASE_READY_MESH_SOURCE=str(self.root / "server"),
                                 PYTHONDONTWRITEBYTECODE="1")
         for name in ("RELEASE_READY_OUTPUT", "RELEASE_READY_INCREMENTAL", "RELEASE_READY_DNS",
@@ -146,22 +183,37 @@ sys.exit(int(os.environ.get('FIXTURE_STATUS', '0')))
         self.environment["FIXTURE_IMAGE_STATUS"] = "1"
         result = self.run_build()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        pull, provision = [json.loads(line) for line in
+        pull, create, start, commit, remove = [json.loads(line) for line in
                            (self.root / "image-builds.jsonl").read_text().splitlines()]
-        # The fixture's git show prints the same text for the base and the recipe.
         self.assertEqual(pull, ["pull", "fixed image inputs"])
-        self.assertEqual(provision[:3], ["provision", "fixed image inputs", self.records()[0]["image"]])
-        self.assertTrue(provision[2].endswith("-bun"), provision[2])
+        self.assertEqual(create[:2], ["create", "--name"])
+        container = create[2]
         folder = self.root / "build/release-ready/provision"
-        self.assertEqual(provision[3], str(folder / "context.tar"))
-        self.assertEqual(provision[4], hashlib.sha256(b"fixture image context").hexdigest())
-        self.assertEqual(provision[5], str(folder / "provision.sh"))
-        self.assertEqual(provision[6], hashlib.sha256(b"fixed image inputs\n").hexdigest())
-        self.assertEqual(provision[7:], [
-            "--env", "EM_NODE_JS=/usr/local/bin/bun", "--env", "EMSDK_NODE=/usr/local/bin/bun",
-            "--env", "EM_CONFIG=/opt/emsdk/.emscripten",
-            "--env", "PATH=/opt/emsdk/upstream/emscripten:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"])
+        self.assertEqual(create[3:], ["--user", "0", "--cgroups=disabled", "-v",
+                         str(folder) + ":/run/harmony-container:ro", "fixed image inputs",
+                         "sh", "/run/harmony-container/provision.sh"])
+        self.assertEqual(start, ["start", "--attach", container])
+        self.assertEqual(commit[-2:], [container, self.records()[0]["image"]])
+        changes = [commit[i + 1] for i, value in enumerate(commit) if value == "--change"]
+        self.assertIn("LABEL org.innerbreeze.context-sha256=" +
+                      hashlib.sha256(b"fixture image context").hexdigest(), changes)
+        self.assertIn("LABEL org.innerbreeze.recipe-sha256=" +
+                      hashlib.sha256(b"fixed image inputs\n").hexdigest(), changes)
+        self.assertIn("ENV EM_NODE_JS=/usr/local/bin/bun", changes)
+        self.assertIn("ENV EMSDK_NODE=/usr/local/bin/bun", changes)
+        self.assertIn("ENV EM_CONFIG=/opt/emsdk/.emscripten", changes)
+        self.assertEqual(remove, ["rm", "-f", container])
         self.assertEqual(self.records()[0]["environment"]["JS_RUNTIME"], "/opt/js-runtime/bun")
+
+    def test_failed_provision_does_not_commit_an_image_or_stamp(self):
+        self.environment.update(FIXTURE_IMAGE_STATUS="1", FIXTURE_PROVISION_STATUS="19")
+        result = self.run_build()
+        self.assertEqual(result.returncode, 19, result.stdout + result.stderr)
+        calls = [json.loads(line) for line in
+                 (self.root / "image-builds.jsonl").read_text().splitlines()]
+        self.assertEqual([call[0] for call in calls], ["pull", "create", "start", "rm"])
+        self.assertFalse(self.records())
+        self.assertFalse((self.root / "build/release-ready/stamp.json").exists())
 
     def test_release_ready_refuses_without_bun(self):
         (self.root / "bin/bun").unlink()

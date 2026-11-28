@@ -5,7 +5,7 @@
 #
 # The container is the Test job's machine: Ubuntu 24.04 with
 # .github/apt/test-packages.txt and Bun (.github/local-ci/provision.sh), which
-# Harmony's container service provisions from the pinned base image.
+# Podman provisions from the pinned base image.
 # It materializes one fixed commit in this checkout’s private overlay, including
 # every tracked file. Source directories are recreated in the overlay so later
 # edits and new files in the canonical checkout cannot enter the tests. Peers
@@ -28,12 +28,18 @@
 # RELEASE_READY_DNS optionally supplies a resolver when rootless DNS is broken.
 set -eu
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+root=${RELEASE_READY_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}
 cd "$root"
+commit=$(git rev-parse "${RELEASE_READY_REVISION:-HEAD}^{commit}")
+# The full suite executes app/runtime/UI tests, which belong on physical Alpha.
+# Target-only builds retain normal build routing and never produce a pass stamp.
+if [ "$#" -eq 0 ] && [ "${RELEASE_READY_HOST:-alpha}" = alpha ]; then
+    exec python3 scripts/release-ready-alpha.py "$@"
+fi
 
 # Legacy task/version names are aliases, never additional permanent outputs.
 requested_output=${RELEASE_READY_OUTPUT:-build/release-ready}
-output=$(python3 scripts/check-build-layout.py "$requested_output") || exit 2
+output=$(python3 -c "$(git show "$commit:scripts/check-build-layout.py")" "$requested_output") || exit 2
 if [ "$output" != "$requested_output" ]; then
     echo "release-ready: $requested_output reuses $output"
 fi
@@ -90,7 +96,6 @@ chmod 755 "$runtime_directory/bun"
 container_runtime=/opt/js-runtime/bun
 container_test_flags=${JS_TEST_FLAGS:-test}
 container_linter=${ADDONS_LINTER:-"/opt/js-runtime/bun x --bun addons-linter"}
-commit=$(git rev-parse "${RELEASE_READY_REVISION:-HEAD}^{commit}")
 image_tag=$({
     git show "$commit:.github/local-ci/base-image"
     git show "$commit:.github/local-ci/provision.sh"
@@ -103,15 +108,19 @@ image=localhost/inbe-ci:$image_tag
 
 # Read the candidate from Git objects, never the changing files on disk.
 content=$(python3 - "$commit" <<'PY_CONTENT'
-import importlib.util
+import subprocess
 import sys
-spec = importlib.util.spec_from_file_location("phone_check", "scripts/phone-check.py")
-module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(module)
+import types
+from pathlib import Path
+module = types.ModuleType("phone_check")
+module.__file__ = str(Path.cwd() / "scripts/phone-check.py")
+sys.modules[module.__name__] = module
+source = subprocess.check_output(["git", "show", sys.argv[1] + ":scripts/phone-check.py"], text=True)
+exec(compile(source, module.__file__, "exec"), module.__dict__)
 print(module.release_content(module.ROOT, sys.argv[1]))
 PY_CONTENT
 )
-snapshot=$(cat scripts/check-release-overlay.py)
+snapshot=$(git show "$commit:scripts/check-release-overlay.py")
 incremental=""
 if [ -n "${RELEASE_READY_INCREMENTAL:-}" ]; then
     [ "$#" -gt 0 ] || { echo "release-ready: RELEASE_READY_INCREMENTAL needs make targets; full runs start clean" >&2; exit 2; }
@@ -203,8 +212,8 @@ else
         echo "release-ready: the container engine could not inspect the CI image" >&2
         exit "$image_status"
     fi
-    # The service runs the candidate's recipe on the pinned base image and
-    # commits the result with its provenance. Both inputs are hashed files
+    # Run the candidate's recipe on the pinned base image and
+    # commit the result with its provenance. Both inputs are hashed files
     # under build/, never the changing checkout.
     echo "release-ready: provisioning $image"
     base=$(git show "$commit:.github/local-ci/base-image")
@@ -214,12 +223,25 @@ else
     git archive --format=tar -o "$provision/context.tar" "$commit:.github"
     git show "$commit:.github/local-ci/provision.sh" > "$provision/provision.sh"
     podman pull "$base"
-    podman provision "$base" "$image" \
-        "$provision/context.tar" "$(sha256sum < "$provision/context.tar" | cut -c1-64)" \
-        "$provision/provision.sh" "$(sha256sum < "$provision/provision.sh" | cut -c1-64)" \
-        --env EM_NODE_JS=/usr/local/bin/bun --env EMSDK_NODE=/usr/local/bin/bun \
-        --env EM_CONFIG=/opt/emsdk/.emscripten \
-        --env PATH=/opt/emsdk/upstream/emscripten:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
+    # Standard Podman keeps provisioning reviewable and works without a
+    # Harmony-specific engine extension. Commit only a successful recipe.
+    (
+        container="inbe-ci-provision-$image_tag-$$"
+        trap 'podman rm -f "$container" >/dev/null' EXIT
+        trap 'exit 130' HUP INT TERM
+        podman create --name "$container" --user 0 --cgroups=disabled \
+            -v "$provision:/run/harmony-container:ro" \
+            "$base" sh /run/harmony-container/provision.sh >/dev/null
+        podman start --attach "$container"
+        podman commit \
+            --change "LABEL org.innerbreeze.context-sha256=$(sha256sum < "$provision/context.tar" | cut -c1-64)" \
+            --change "LABEL org.innerbreeze.recipe-sha256=$(sha256sum < "$provision/provision.sh" | cut -c1-64)" \
+            --change 'ENV EM_NODE_JS=/usr/local/bin/bun' \
+            --change 'ENV EMSDK_NODE=/usr/local/bin/bun' \
+            --change 'ENV EM_CONFIG=/opt/emsdk/.emscripten' \
+            --change 'ENV PATH=/opt/emsdk/upstream/emscripten:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin' \
+            "$container" "$image"
+    )
 fi
 
 rm -f "$output/stamp.json"
@@ -242,7 +264,7 @@ if [ -n "${RELEASE_READY_DNS:-}" ]; then
     dns_option="--dns=$RELEASE_READY_DNS"
 fi
 # shellcheck disable=SC2086
-podman run --rm --pull=never --userns=keep-id \
+podman run --rm --pull=never --userns=keep-id --cgroups=disabled \
     $dns_option \
     -v "$root:/src:O" \
     -v "$root/$output/build:/src/build" \
