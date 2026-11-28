@@ -8,7 +8,7 @@ source=$root/tests/breath_timing_behavior.zi
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 
 mkdir -p "$work/ir"
-"$bin/zi2zir" --root "$root/tests" --module-path "$root/src" --module-path "$root/apps/practice" \
+"$bin/zi2zir" --root "$root/tests" --module-path "$root/src" --module-path "$root/apps/practice/src/native" \
     -o "$work/ir" "$source"
 
 for input in source saved; do
@@ -16,7 +16,7 @@ for input in source saved; do
         file=$source
         module_root=$root/tests
         library_path=$root/src
-        practice_path=$root/apps/practice
+        practice_path=$root/apps/practice/src/native
     else
         file=$work/ir/breath_timing_behavior.zir
         module_root=$work/ir
