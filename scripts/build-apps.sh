@@ -39,7 +39,7 @@ mkdir -p build/bundled-apps
 entity_dir="$root/build/packages/entity"
 mkdir -p build/entity
 bundle --root . --define KRYON_HOSTED_UI \
-    --entry entity__entity:Main -o build/entity/entity.zx "$entity_dir/src/entity.zi"
+    --entry entity__entity_ui:main -o build/entity/entity.zx "$entity_dir/src/entity_ui.tsx"
 # Entity's images are supplied once by the root package below. Its hosted
 # child uses those same asset paths; embedding a second copy bloats every APK.
 for feature in lists habits practices diary lumi leaderboard; do
