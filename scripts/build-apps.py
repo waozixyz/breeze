@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 import shutil
@@ -48,9 +49,12 @@ def main():
         app = next(item for item in lock['packages'] if item['id'] == identity)
         controller_lock = json.loads((package / 'ziran.lock').read_text())
         toolchain = controller_lock['toolchain']
+        # Resolve the locked source using this launcher, then build the three
+        # controller tools below. Metadata lookup needs no other tool binaries.
+        lookup_environment = dict(os.environ, ZIRAN_PINNED_LAUNCHER='1')
         compiler_root = Path(subprocess.check_output(
             [str(args.ziran.resolve()), 'pkg', 'path', 'ziran', '--locked'],
-            cwd=package, text=True).strip())
+            cwd=package, text=True, env=lookup_environment).strip())
         compiler = compiler_root / 'build/bin/ziran'
         tools = ('ziran', 'zi2zir', 'zi2zx')
         if any(not (compiler_root / 'build/bin' / name).is_file() for name in tools):
